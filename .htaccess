@@ -1,0 +1,13 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # If the request is for an existing file or directory, serve it directly
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+
+    # Rewrite everything else to Laravel's public folder
+    RewriteRule ^(.*)$ public/$1 [L]
+
+    # Optional: redirect root to public/index.php
+    DirectoryIndex public/index.php
+</IfModule>

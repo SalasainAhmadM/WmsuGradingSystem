@@ -1,0 +1,32 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        DB::statement('CREATE TABLE IF NOT EXISTS curriculum_subjects(
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            curriculum_id INT,
+            year_level_id INT,
+            semester_id INT,
+            subject_id INT,
+            date_created DATETIME DEFAULT CURRENT_TIMESTAMP,
+            date_updated DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        );');
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::dropIfExists('curriculum_subjects');
+    }
+};

@@ -14,9 +14,55 @@
                 Attendance
             </button>
         </div>
-    </div>
+    </div> 
 
-
+<style>
+    /* Remarks dropdown styling */
+    select.badge {
+        padding: 0.35rem 0.65rem;
+        font-weight: 500;
+        cursor: pointer;
+        appearance: none;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='white' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 0.5rem center;
+        background-size: 12px;
+        padding-right: 2rem;
+    }
+    
+    select.badge:focus {
+        outline: 2px solid rgba(0,0,0,0.1);
+        outline-offset: 2px;
+    }
+    
+    select.badge.bg-success {
+        background-color: #198754 !important;
+        color: white !important;
+    }
+    
+    select.badge.bg-danger {
+        background-color: #dc3545 !important;
+        color: white !important;
+    }
+    
+    select.badge.bg-warning {
+        background-color: #ffc107 !important;
+        color: #000 !important;
+    }
+    
+    select.badge.bg-secondary {
+        background-color: #6c757d !important;
+        color: white !important;
+    }
+    
+    select.badge.bg-light {
+        background-color: #f8f9fa !important;
+        color: #000 !important;
+        border: 1px solid #dee2e6 !important;
+    }
+</style>
 
     <div class="container-fluid">
         <div class="table-header">
@@ -32,6 +78,16 @@
                     @foreach ($terms as $key =>$value )
                         <option value="{{ $value->id }}">{{ $value->term_name }}</option>
                     @endforeach
+                </select>
+            </div>
+            <div class="col-2 d-flex justify-items-start gap-1 ">
+                <label for="" class="mt-2">Remarks </label>
+                <select name="" id="" class="form-control" wire:model.live="filters.remarks">
+                    <option value="">All</option>
+                    <option value="PASSED">PASSED</option>
+                    <option value="FAILED">FAILED</option>
+                    <option value="INC">INC</option>
+                    <option value="DROP">DROP</option>
                 </select>
             </div>
             <div class="col">
@@ -113,14 +169,13 @@
                             @endforelse
                             <th class="">Total</th>
                             <th class="">Total Term Grade</th>
-                            <th colspan="{{ ($schedule->is_lec ? "4": "3") }}">
-                                    {{
-                                    $terms[
-                                        $detail['term_id'] != $terms[0]->id
-                                    ]->term_name 
-                                    }}
-                                Grade
+                            @php
+                                $current_term = collect($terms)->firstWhere('id', $detail['term_id']);
+                            @endphp
+                            <th colspan="{{ ($schedule->is_lec ? '4' : '3') }}">
+                                {{ $current_term ? $current_term->term_name : 'Grade' }} Grade
                             </th>
+                            <th class=""></th>
                         </tr>
                         <tr class="align-middle">
                             <th scope="col" class="sticky-col left-0">#</th>
@@ -156,7 +211,7 @@
                                 ->where('schedule_id','=',$detail['schedule_id'])
                                 ->first();
                             @endphp
-                            <th scope="col" class="">{{ 100 }}</th>
+                            <th scope="col" class="">{{ number_format($term_weight['weight'] ?? 100, 2) }}%</th>
                             @if($schedule->is_lec)
                                 <th scope="col" class="">Lecture</th>
                             @endif
@@ -165,6 +220,7 @@
                             @endif
                             <th scope="col" class="">Total</th>
                             <th scope="col" class="">Weighted Grade</th>
+                            <th scope="col" class="">Remarks</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -262,7 +318,7 @@
                                                                 $sub_total = $sub_average / $school_work_type_count_prev
                                                             @endphp
                                                             {{ number_format( $sub_total*100, 2, '.', '')    }}
-                                                            {{  number_format(( $sub_total * $school_work_type_weight), 2, '.', '')}}
+                                                            <!-- {{  number_format(( $sub_total * $school_work_type_weight), 2, '.', '')}} -->
                                                         @php
                                                                 $total_grade +=  ($sub_total * $school_work_type_weight/100);
                                                                 $sub_average = 0;
@@ -335,190 +391,264 @@
                                                 ]);
                                             }
                                         }
-                                        $mid_term_grade = DB::table('term_grades')
-                                            ->select(
-                                            DB::raw('sum(grade) as grade'))
-                                            ->where('schedule_id','=',$detail['schedule_id'])
-                                            ->where('student_id','=',$value->id)
-                                            ->where('term_id','=',$terms[0]->id)
-                                            ->first();
-                                    @endphp
-                                    @if(floatval($mid_term_grade->grade))
-                                    @else
-                                    @endif
-                                    @php
-                                        $this_grade = $mid_term_grade->grade * ($term_weight['weight'] / $term_total->total * 100) / 100;
-                                        $term_grades = DB::table('term_grades')
-                                                ->select(
-                                                DB::raw('sum(grade) as grade'))
-                                                ->where('schedule_id','=',$detail['schedule_id'])
-                                                ->where('student_id','=',$value->id)
-                                                ->first();
+                                        $current_term_grade = DB::table('term_grades')
+        ->where('schedule_id','=',$detail['schedule_id'])
+        ->where('student_id','=',$value->id)
+        ->where('term_id','=',$detail['term_id']) // Use current selected term
+        ->first();
 
-                                        $final_term_grade = DB::table('term_grades')
-                                            ->select(
-                                            DB::raw('sum(grade) as grade'))
-                                            ->where('schedule_id','=',$detail['schedule_id'])
-                                            ->where('student_id','=',$value->id)
-                                            ->where('term_id','=',$terms[1]->id)
-                                            ->first();
-                                        if($term_grades){
-                                            $grade = $term_grades->grade;
-                                        }else{
-                                            $grade = '';
-                                        }
-                                    @endphp
-                                    @if(floatval($final_term_grade->grade)>=0)
-                                    @else
-                                        @php
-                                        $inc = true
-                                        @endphp
-                                    @endif
-                                <td>
-                                    @php
-                                        $lab_lec = DB::table('lab_lec')
-                                            ->where('schedule_id','=',$detail['schedule_id'])
-                                            ->where('term_id','=',$detail['term_id'])
-                                            ->first();
-                                        $lab_lec_grades = DB::table('lab_lec_grades')
-                                            ->where('schedule_id','=',$detail['schedule_id'])
-                                            ->where('student_id','=',$value->id)
-                                            ->first();
-                                        if(DB::table('term_grades')
-                                            ->where('schedule_id','=',$detail['schedule_id'])
-                                            ->where('student_id','=',$value->id)
-                                            ->where('other','=','INC')
-                                            ->first()){
-                                            $grade = NULL;
-                                        }else{
-                                            $term_grades = DB::table('term_grades')
-                                                    ->select(
-                                                    DB::raw('sum(grade) as grade'))
-                                                    ->where('schedule_id','=',$detail['schedule_id'])
-                                                    ->where('student_id','=',$value->id)
-                                                    ->first();
-                                            if($term_grades){
-                                                $grade = $term_grades->grade;
-                                                if($lab_lec_grades){
+    // Get lab/lec grades for current term only
+    $lab_lec = DB::table('lab_lec')
+        ->where('schedule_id','=',$detail['schedule_id'])
+        ->where('term_id','=',$detail['term_id']) // Use current selected term
+        ->first();
 
-                                                    DB::table('lab_lec_grades')
-                                                    ->where('id','=',$lab_lec_grades->id)
-                                                    ->where('student_id','=',$value->id)
-                                                    ->update([
-                                                        'schedule_id' => $detail['schedule_id'],
-                                                        'sub_weight' => $lab_lec->sub_weight,
-                                                        'grade' => (floatval($grade) ? $grade * $lab_lec->sub_weight/100 : NULL),
-                                                    ]);
-                                                }
-                                                
-                                            }else{
-                                                $grade = NULL;
-                                            }
-                                        }
-                                        if(!$lab_lec_grades ){
-                                            DB::table('lab_lec_grades')
-                                            ->insert([
-                                                'schedule_id' => $detail['schedule_id'],
-                                                'student_id' => $value->id,
-                                                'sub_weight' => $lab_lec->sub_weight,
-                                                'grade' => (floatval($grade) ? $grade*$lab_lec->sub_weight/100 : NULL),
-                                                'other' => (floatval($grade) ? NULL : NULL),
-                                            ]);
-                                        }
+    $lab_lec_grades = DB::table('lab_lec_grades')
+        ->where('schedule_id','=',$detail['schedule_id'])
+        ->where('student_id','=',$value->id)
+        ->first();
 
-                                    @endphp
-                                    @if(floatval($grade) && !$inc)
-                                        {{ number_format($grade*100, 2, '.', '') }}
-                                    @else
-                                        @if($lab_lec_grades)
-                                            @php
-                                                $other = DB::table('lab_lec_grades')
-                                                ->where('student_id','=',$value->id)
-                                                ->where('id','=',$lab_lec_grades->id)
-                                                ->first();
-                                                if($other){
-                                                    $grade = $other->other;
-                                                }
-                                            @endphp
-                                            <input type="text" class="form-control" value="{{$grade }}" wire:change="updateLabLecGrades({{ $lab_lec_grades->id }},{{ $value->id }},$event.target.value,)">
-                                        @endif
-                                    @endif
-                                </td>
-                                @php
-                                    $total_grade = 0;
-                                    $total_lab_lec_grade = 0;
-                                    $total_lab_lec_grade_average = 0;
-                                @endphp 
-                                @if($schedule->is_lec)
-                                    <th scope="col" class="">
-                                        @php 
-                                            $total_lab_lec_grade_average += 1;
-                                            $lab_lec_grade = DB::table('lab_lec_grades')
-                                                ->where('schedule_id','=', $detail['schedule_id'])
-                                                ->where('student_id','=',$value->id)
-                                                ->first();
-                                        @endphp
-                                        @if($lab_lec_grade != null && floatval($lab_lec_grade->grade))
-                                            {{ number_format(($lab_lec_grade->grade/$lab_lec_grade->sub_weight)*100*100, 2, '.', '') }}
-                                            @php 
-                                                $total_lab_lec_grade +=  floatval($lab_lec_grade->grade) ? floatval($lab_lec_grade->grade/$lab_lec_grade->sub_weight * 100 * 100):0;
-                                            @endphp
-                                        @else
-                                            {{$lab_lec_grade ? $lab_lec_grade->other : ""}}    
-                                        @endif
-                                    </th>
-                                @endif
-                                @if($schedule->laboratory_unit>0 || $schedule->is_lec == 0)
-                                    <th scope="col" class="">
-                                        @php 
-                                            $lab_lec_grade = DB::table('lab_lec_grades')
-                                                ->where('schedule_id','=', $laboratory_schedules[0]->id)
-                                                ->where('student_id','=',$value->id)
-                                                ->first();                                            
-                                            $total_lab_lec_grade_average += 1;
-                                        @endphp
-                                         @if($lab_lec_grade != null && floatval($lab_lec_grade->grade))
-                                            {{ number_format(($lab_lec_grade->grade/$lab_lec_grade->sub_weight)*100*100, 2, '.', '') }}
-                                            @php 
-                                                $total_lab_lec_grade +=  floatval($lab_lec_grade->grade) ? floatval($lab_lec_grade->grade/$lab_lec_grade->sub_weight * 100 * 100):0;
-                                            @endphp
-                                        @else
-                                            {{$lab_lec_grade ? $lab_lec_grade->other : ""}}    
-                                        @endif
-                                    </th>
-                                @endif
-                                <th scope="col" class="">
-                                    @if(floatval($total_lab_lec_grade))
-                                        {{ number_format(($total_lab_lec_grade/$total_lab_lec_grade_average), 2, '.', '') }}
-                                    @else
-                                        0   
-                                    @endif
-                                </th>
-                               
-                                <th scope="col" class="">
-                                    @if(floatval($total_lab_lec_grade))
-                                        @php
-                                        $point_grade = true;
-                                        @endphp
-                                        @foreach($point_grade_equivalent as $p_value)
-                                            @if(($total_lab_lec_grade/$total_lab_lec_grade_average) >= $p_value->minimum  && $total_lab_lec_grade/$total_lab_lec_grade_average < $p_value->maximum+1)
-                                                {{ $p_value->grade }}
-                                                @php
-                                                    $point_grade = false;
-                                                @endphp
-                                            @endif
-                                        @endforeach
-                                        @if($point_grade)
-                                            N/A
-                                        @endif
-                                    @else 
-                                        0
-                                    @endif
-                                </th>
+    // Update or insert lab_lec_grades for current term
+    if(!$lab_lec_grades){
+        DB::table('lab_lec_grades')
+        ->insert([
+            'schedule_id' => $detail['schedule_id'],
+            'student_id' => $value->id,
+            'sub_weight' => $lab_lec->sub_weight,
+            'grade' => ($current_term_grade && floatval($current_term_grade->grade) ? $current_term_grade->grade * $lab_lec->sub_weight/100 : NULL),
+            'other' => NULL,
+        ]);
+        $lab_lec_grades = DB::table('lab_lec_grades')
+            ->where('schedule_id','=',$detail['schedule_id'])
+            ->where('student_id','=',$value->id)
+            ->first();
+    } else {
+        // Update existing grade
+        if($current_term_grade && !DB::table('term_grades')
+            ->where('schedule_id','=',$detail['schedule_id'])
+            ->where('student_id','=',$value->id)
+            ->where('term_id','=',$detail['term_id'])
+            ->where('other','=','INC')
+            ->first()){
+            
+            DB::table('lab_lec_grades')
+            ->where('id','=',$lab_lec_grades->id)
+            ->where('student_id','=',$value->id)
+            ->update([
+                'schedule_id' => $detail['schedule_id'],
+                'sub_weight' => $lab_lec->sub_weight,
+                'grade' => (floatval($current_term_grade->grade) ? $current_term_grade->grade * $lab_lec->sub_weight/100 : NULL),
+            ]);
+            
+            // Refresh the grade
+            $lab_lec_grades = DB::table('lab_lec_grades')
+                ->where('schedule_id','=',$detail['schedule_id'])
+                ->where('student_id','=',$value->id)
+                ->first();
+        }
+    }
+
+    $grade = $current_term_grade ? $current_term_grade->grade : NULL;
+@endphp
+
+<td>
+    @if(floatval($grade) && !$inc)
+        {{ number_format($grade*100, 2, '.', '') }}
+    @else
+        @if($lab_lec_grades)
+            @php
+                $other = DB::table('lab_lec_grades')
+                ->where('student_id','=',$value->id)
+                ->where('id','=',$lab_lec_grades->id)
+                ->first();
+                if($other){
+                    $grade = $other->other;
+                }
+            @endphp
+            <input type="text" class="form-control" value="{{$grade }}" wire:change="updateLabLecGrades({{ $lab_lec_grades->id }},{{ $value->id }},$event.target.value)">
+        @endif
+    @endif
+</td>
+
+@php
+    $total_grade = 0;
+    $total_lab_lec_grade = 0;
+    $total_lab_lec_grade_average = 0;
+@endphp 
+
+@if($schedule->is_lec)
+    <th scope="col" class="">
+        @php 
+            $total_lab_lec_grade_average += 1;
+            $lab_lec_grade = DB::table('lab_lec_grades')
+                ->where('schedule_id','=', $detail['schedule_id'])
+                ->where('student_id','=',$value->id)
+                ->first();
+            
+            // Get current term weight
+            $current_term = collect($terms)->firstWhere('id', $detail['term_id']);
+            $term_weight_percent = $current_term ? $current_term->weight : 100;
+            
+            // Calculate scaled lecture grade
+            $scaled_lecture_grade = 0;
+            if($lab_lec_grade != null && floatval($lab_lec_grade->grade)){
+                // Get the actual grade percentage (0-100 scale based on term weight)
+                $actual_grade_percent = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100;
+                
+                // Scale it to 100 based on term weight
+                // Formula: (actual_grade / term_weight) * 100
+                $scaled_lecture_grade = ($actual_grade_percent / $term_weight_percent) * 10000;
+                
+                $total_lab_lec_grade += $scaled_lecture_grade;
+            }
+        @endphp
+        @if($lab_lec_grade != null && floatval($lab_lec_grade->grade))
+            {{ number_format($scaled_lecture_grade, 2, '.', '') }}
+        @else
+            {{$lab_lec_grade ? $lab_lec_grade->other : ""}}    
+        @endif
+    </th>
+@endif
+
+@if($schedule->laboratory_unit > 0 || $schedule->is_lec == 0)
+    <th scope="col" class="">
+        @php 
+            $lab_lec_grade = DB::table('lab_lec_grades')
+                ->where('schedule_id','=', $laboratory_schedules[0]->id ?? null)
+                ->where('student_id','=',$value->id)
+                ->first();                                            
+            $total_lab_lec_grade_average += 1;
+        @endphp
+        @if($lab_lec_grade != null && floatval($lab_lec_grade->grade))
+            {{ number_format(($lab_lec_grade->grade/$lab_lec_grade->sub_weight)*100*100, 2, '.', '') }}
+            @php 
+                $total_lab_lec_grade += floatval($lab_lec_grade->grade) ? floatval($lab_lec_grade->grade/$lab_lec_grade->sub_weight * 100 * 100) : 0;
+            @endphp
+        @else
+            {{$lab_lec_grade ? $lab_lec_grade->other : ""}}    
+        @endif
+    </th>
+@endif
+
+<th scope="col" class="">
+    @if(floatval($total_lab_lec_grade))
+        {{ number_format(($total_lab_lec_grade/$total_lab_lec_grade_average), 2, '.', '') }}
+    @else
+        0   
+    @endif
+</th>
+
+<th scope="col" class="">
+    @if(floatval($total_lab_lec_grade))
+        @php
+        $point_grade = true;
+        @endphp
+        @foreach($point_grade_equivalent as $p_value)
+            @if(($total_lab_lec_grade/$total_lab_lec_grade_average) >= $p_value->minimum && $total_lab_lec_grade/$total_lab_lec_grade_average < $p_value->maximum+1)
+                {{ $p_value->grade }}
+                @php
+                    $point_grade = false;
+                @endphp
+            @endif
+        @endforeach
+        @if($point_grade)
+            N/A
+        @endif
+    @else 
+        0
+    @endif
+</th>
+<th scope="col" class="">
+    @php
+        $final_grade = floatval($total_lab_lec_grade) ? ($total_lab_lec_grade/$total_lab_lec_grade_average) : 0;
+        
+        // Get current term-specific remark
+        $term_grade_record = DB::table('term_grades')
+            ->where('schedule_id','=',$detail['schedule_id'])
+            ->where('student_id','=',$value->id)
+            ->where('term_id','=',$detail['term_id']) // This makes it term-specific
+            ->first();
+        
+        $current_remark = $term_grade_record ? $term_grade_record->remarks : null;
+        
+        // Auto-calculate default remarks if not set
+        if (empty($current_remark)) {
+            // Check for INC status in current term
+            $has_inc = DB::table('term_grades')
+                ->where('schedule_id','=',$detail['schedule_id'])
+                ->where('student_id','=',$value->id)
+                ->where('term_id','=',$detail['term_id']) // Current term only
+                ->where('other','=','INC')
+                ->exists();
+                
+            $has_lab_inc = DB::table('lab_lec_grades')
+                ->where('schedule_id','=',$detail['schedule_id'])
+                ->where('student_id','=',$value->id)
+                ->where('other','=','INC')
+                ->exists();
+            
+            // Check for DROP status in current term
+            $has_drop = DB::table('term_grades')
+                ->where('schedule_id','=',$detail['schedule_id'])
+                ->where('student_id','=',$value->id)
+                ->where('term_id','=',$detail['term_id']) // Current term only
+                ->where('other','=','DROP')
+                ->exists();
+                
+            $has_lab_drop = DB::table('lab_lec_grades')
+                ->where('schedule_id','=',$detail['schedule_id'])
+                ->where('student_id','=',$value->id)
+                ->where('other','=','DROP')
+                ->exists();
+            
+            if ($has_inc || $has_lab_inc) {
+                $current_remark = 'INC';
+            } elseif ($has_drop || $has_lab_drop) {
+                $current_remark = 'DROP';
+            } elseif ($final_grade > 0) {
+                // Find passing grade from point_grade_equivalent
+                $passing_grade = 3.0;
+                foreach($point_grade_equivalent as $p_value) {
+                    if ($final_grade >= $p_value->minimum && $final_grade < $p_value->maximum + 1) {
+                        if (floatval($p_value->grade) <= $passing_grade) {
+                            $current_remark = 'PASSED';
+                        } else {
+                            $current_remark = 'FAILED';
+                        }
+                        break;
+                    }
+                }
+                
+                if (empty($current_remark)) {
+                    $current_remark = $final_grade >= 75 ? 'PASSED' : 'FAILED';
+                }
+            }
+        }
+        
+        // Badge color classes
+        $badge_class = match($current_remark) {
+            'PASSED' => 'bg-success',
+            'FAILED' => 'bg-danger',
+            'INC' => 'bg-warning text-dark',
+            'DROP' => 'bg-secondary',
+            default => 'bg-light text-dark'
+        };
+    @endphp
+    
+    <select class="form-select form-select-sm badge {{ $badge_class }}" 
+            style="min-width: 100px; border: none;"
+            wire:change="updateRemarks({{ $value->id }}, $event.target.value)">
+        <option value="" {{ empty($current_remark) ? 'selected' : '' }}>N/A</option>
+        <option value="PASSED" {{ $current_remark == 'PASSED' ? 'selected' : '' }}>PASSED</option>
+        <option value="FAILED" {{ $current_remark == 'FAILED' ? 'selected' : '' }}>FAILED</option>
+        <option value="INC" {{ $current_remark == 'INC' ? 'selected' : '' }}>INC</option>
+        <option value="DROP" {{ $current_remark == 'DROP' ? 'selected' : '' }}>DROP</option>
+    </select>
+</th>
                             </tr>
                         @empty
                             <tr class="align-middle">
-                                <td colspan="42">
+                                <td colspan="43">
                                     <div class="alert alert-danger d-flex justify-content-center">No records found!</div>
                                 </td>
                             </tr>
