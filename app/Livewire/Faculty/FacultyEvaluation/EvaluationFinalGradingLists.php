@@ -1189,4 +1189,301 @@ class EvaluationFinalGradingLists extends Component
             }
         }
     }
+    public function exportCSV()
+    {
+        // Get all students for this schedule
+        $students = DB::table('enrolled_students as es')
+            ->select(
+                's.id',
+                's.code',
+                DB::raw('CONCAT_WS(" ", s.first_name, s.middle_name, s.last_name, s.suffix) AS fullname'),
+                'c.name as college',
+                'd.name as department',
+                'yl.year_level'
+            )
+            ->leftJoin('students as s', 's.id', 'es.student_id')
+            ->leftJoin('colleges as c', 'c.id', 's.college_id')
+            ->leftJoin('departments as d', 'd.id', 's.department_id')
+            ->leftJoin('year_levels as yl', 'yl.id', 's.year_level_id')
+            ->where('es.schedule_id', '=', $this->detail['schedule_id'])
+            ->orderBy('s.is_active', 'desc')
+            ->orderBy('s.id', 'desc')
+            ->get();
+
+        // Apply filters if set
+        if (!empty($this->filters['search'])) {
+            $students = $students->filter(function ($student) {
+                return stripos($student->code, $this->filters['search']) !== false ||
+                    stripos($student->fullname, $this->filters['search']) !== false;
+            });
+        }
+
+        if (!empty($this->filters['remarks'])) {
+            $student_ids = DB::table('final_grades')
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->where('remarks', '=', $this->filters['remarks'])
+                ->pluck('student_id')
+                ->toArray();
+
+            $students = $students->whereIn('id', $student_ids);
+        }
+
+        // Prepare CSV content
+        $filename = 'final_grades_' . $this->school_year . '_' . $this->semester . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.csv';
+
+        $headers = [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+        ];
+
+        $callback = function () use ($students) {
+            $file = fopen('php://output', 'w');
+
+            // Add BOM for UTF-8
+            fprintf($file, chr(0xEF) . chr(0xBB) . chr(0xBF));
+
+            // Header row
+            $header = ['#', 'Student Code', 'Student Name', 'College', 'Department', 'Year Level'];
+
+            if ($this->schedule->is_lec) {
+                $header[] = 'Lecture Grade';
+            }
+            if ($this->schedule->laboratory_unit > 0) {
+                $header[] = 'Laboratory Grade';
+            }
+            $header[] = 'Total Grade';
+            $header[] = 'Weighted Grade';
+            $header[] = 'Remarks';
+
+            fputcsv($file, $header);
+
+            // Data rows
+            $counter = 1;
+            foreach ($students as $student) {
+                $final_grade = DB::table('final_grades')
+                    ->where('schedule_id', '=', $this->detail['schedule_id'])
+                    ->where('student_id', '=', $student->id)
+                    ->first();
+
+                $row = [
+                    $counter++,
+                    $student->code,
+                    $student->fullname,
+                    $student->college ?? 'N/A',
+                    $student->department ?? 'N/A',
+                    $student->year_level ?? 'N/A'
+                ];
+
+                if ($this->schedule->is_lec) {
+                    $row[] = $final_grade && $final_grade->lecture_grade !== null
+                        ? number_format($final_grade->lecture_grade, 2, '.', '')
+                        : '';
+                }
+
+                if ($this->schedule->laboratory_unit > 0) {
+                    $row[] = $final_grade && $final_grade->laboratory_grade !== null
+                        ? number_format($final_grade->laboratory_grade, 2, '.', '')
+                        : '';
+                }
+
+                $row[] = $final_grade && $final_grade->total_grade !== null
+                    ? number_format($final_grade->total_grade, 2, '.', '')
+                    : '';
+
+                $row[] = $final_grade && $final_grade->weighted_grade !== null
+                    ? number_format($final_grade->weighted_grade, 2, '.', '')
+                    : '';
+
+                $row[] = $final_grade && $final_grade->remarks
+                    ? $final_grade->remarks
+                    : 'N/A';
+
+                fputcsv($file, $row);
+            }
+
+            fclose($file);
+        };
+
+        return response()->stream($callback, 200, $headers);
+    }
+
+    public function exportExcel()
+    {
+        // Get all students for this schedule
+        $students = DB::table('enrolled_students as es')
+            ->select(
+                's.id',
+                's.code',
+                DB::raw('CONCAT_WS(" ", s.first_name, s.middle_name, s.last_name, s.suffix) AS fullname'),
+                'c.name as college',
+                'd.name as department',
+                'yl.year_level'
+            )
+            ->leftJoin('students as s', 's.id', 'es.student_id')
+            ->leftJoin('colleges as c', 'c.id', 's.college_id')
+            ->leftJoin('departments as d', 'd.id', 's.department_id')
+            ->leftJoin('year_levels as yl', 'yl.id', 's.year_level_id')
+            ->where('es.schedule_id', '=', $this->detail['schedule_id'])
+            ->orderBy('s.is_active', 'desc')
+            ->orderBy('s.id', 'desc')
+            ->get();
+
+        // Apply filters if set
+        if (!empty($this->filters['search'])) {
+            $students = $students->filter(function ($student) {
+                return stripos($student->code, $this->filters['search']) !== false ||
+                    stripos($student->fullname, $this->filters['search']) !== false;
+            });
+        }
+
+        if (!empty($this->filters['remarks'])) {
+            $student_ids = DB::table('final_grades')
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->where('remarks', '=', $this->filters['remarks'])
+                ->pluck('student_id')
+                ->toArray();
+
+            $students = $students->whereIn('id', $student_ids);
+        }
+
+        // Create Excel content
+        $filename = 'final_grades_' . $this->school_year . '_' . $this->semester . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.xls';
+
+        $headers = [
+            'Content-Type' => 'application/vnd.ms-excel',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+            'Pragma' => 'no-cache',
+            'Cache-Control' => 'must-revalidate, post-check=0, pre-check=0',
+            'Expires' => '0',
+        ];
+
+        $callback = function () use ($students) {
+            echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
+            echo '<head>';
+            echo '<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">';
+            echo '<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>';
+            echo '<x:Name>Final Grades</x:Name>';
+            echo '<x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet>';
+            echo '</x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->';
+            echo '<style>';
+            echo 'table { border-collapse: collapse; width: 100%; }';
+            echo 'th, td { border: 1px solid black; padding: 8px; text-align: left; }';
+            echo 'th { background-color: #952323; color: white; font-weight: bold; }';
+            echo '.text-center { text-align: center; }';
+            echo '.badge-passed { background-color: #198754; color: white; font-weight: bold; padding: 5px 10px; }';
+            echo '.badge-failed { background-color: #dc3545; color: white; font-weight: bold; padding: 5px 10px; }';
+            echo '.badge-inc { background-color: #ffc107; color: black; font-weight: bold; padding: 5px 10px; }';
+            echo '.badge-drop { background-color: #6c757d; color: white; font-weight: bold; padding: 5px 10px; }';
+            echo '</style>';
+            echo '</head><body>';
+
+            // Add title and schedule info
+            echo '<h2>Final Grades Report</h2>';
+            echo '<p><strong>School Year:</strong> ' . htmlspecialchars($this->school_year) . '</p>';
+            echo '<p><strong>Semester:</strong> ' . htmlspecialchars($this->semester) . '</p>';
+            if ($this->schedule) {
+                echo '<p><strong>Subject:</strong> ' . htmlspecialchars($this->schedule->subject) . '</p>';
+                echo '<p><strong>Faculty:</strong> ' . htmlspecialchars($this->schedule->faculty_fullname) . '</p>';
+            }
+            echo '<br>';
+
+            echo '<table>';
+
+            // Header row
+            echo '<thead><tr>';
+            echo '<th>#</th>';
+            echo '<th>Student Code</th>';
+            echo '<th>Student Name</th>';
+            echo '<th>College</th>';
+            echo '<th>Department</th>';
+            echo '<th>Year Level</th>';
+
+            if ($this->schedule->is_lec) {
+                echo '<th>Lecture Grade</th>';
+            }
+            if ($this->schedule->laboratory_unit > 0) {
+                echo '<th>Laboratory Grade</th>';
+            }
+            echo '<th>Total Grade</th>';
+            echo '<th>Weighted Grade</th>';
+            echo '<th>Remarks</th>';
+            echo '</tr></thead><tbody>';
+
+            // Data rows
+            $counter = 1;
+            foreach ($students as $student) {
+                $final_grade = DB::table('final_grades')
+                    ->where('schedule_id', '=', $this->detail['schedule_id'])
+                    ->where('student_id', '=', $student->id)
+                    ->first();
+
+                echo '<tr>';
+                echo '<td class="text-center">' . $counter++ . '</td>';
+                echo '<td>' . htmlspecialchars($student->code) . '</td>';
+                echo '<td>' . htmlspecialchars($student->fullname) . '</td>';
+                echo '<td>' . htmlspecialchars($student->college ?? 'N/A') . '</td>';
+                echo '<td>' . htmlspecialchars($student->department ?? 'N/A') . '</td>';
+                echo '<td>' . htmlspecialchars($student->year_level ?? 'N/A') . '</td>';
+
+                if ($this->schedule->is_lec) {
+                    echo '<td class="text-center">' .
+                        ($final_grade && $final_grade->lecture_grade !== null
+                            ? number_format($final_grade->lecture_grade, 2, '.', '')
+                            : '') .
+                        '</td>';
+                }
+
+                if ($this->schedule->laboratory_unit > 0) {
+                    echo '<td class="text-center">' .
+                        ($final_grade && $final_grade->laboratory_grade !== null
+                            ? number_format($final_grade->laboratory_grade, 2, '.', '')
+                            : '') .
+                        '</td>';
+                }
+
+                echo '<td class="text-center">' .
+                    ($final_grade && $final_grade->total_grade !== null
+                        ? number_format($final_grade->total_grade, 2, '.', '')
+                        : '') .
+                    '</td>';
+
+                echo '<td class="text-center">' .
+                    ($final_grade && $final_grade->weighted_grade !== null
+                        ? number_format($final_grade->weighted_grade, 2, '.', '')
+                        : '') .
+                    '</td>';
+
+                $remarks = $final_grade && $final_grade->remarks ? $final_grade->remarks : 'N/A';
+
+                // Set background color based on remarks
+                $bg_color = match ($remarks) {
+                    'PASSED' => '#198754',
+                    'FAILED' => '#dc3545',
+                    'INC' => '#ffc107',
+                    'DROP' => '#6c757d',
+                    default => '#f8f9fa'
+                };
+
+                $text_color = match ($remarks) {
+                    'PASSED' => '#ffffff',
+                    'FAILED' => '#ffffff',
+                    'INC' => '#000000',
+                    'DROP' => '#ffffff',
+                    default => '#000000'
+                };
+
+                echo '<td class="text-center" style="background-color: ' . $bg_color . '; color: ' . $text_color . '; font-weight: bold;">' .
+                    htmlspecialchars($remarks) .
+                    '</td>';
+
+                echo '</tr>';
+            }
+
+            echo '</tbody></table>';
+            echo '<br><p><em>Generated on: ' . now()->timezone('Asia/Manila')->format('F d, Y h:i A') . '</em></p>';
+            echo '</body></html>';
+        };
+
+        return response()->stream($callback, 200, $headers);
+    }
 }
