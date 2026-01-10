@@ -1651,5 +1651,534 @@ class FacultyEvaluationLists extends Component
                 ]);
         }
     }
+    public function exportCSV()
+    {
+        // Get all students for this schedule
+        $students = DB::table('enrolled_students as es')
+            ->select(
+                's.id',
+                's.code',
+                DB::raw('CONCAT_WS(" ", s.first_name, s.middle_name, s.last_name, s.suffix) AS fullname'),
+                'c.name as college',
+                'd.name as department',
+                'yl.year_level'
+            )
+            ->leftJoin('students as s', 's.id', 'es.student_id')
+            ->leftJoin('colleges as c', 'c.id', 's.college_id')
+            ->leftJoin('departments as d', 'd.id', 's.department_id')
+            ->leftJoin('year_levels as yl', 'yl.id', 's.year_level_id')
+            ->where('es.schedule_id', '=', $this->detail['schedule_id'])
+            ->orderBy('s.is_active', 'desc')
+            ->orderBy('s.id', 'desc')
+            ->get();
 
+        // Apply filters if set
+        if (!empty($this->filters['search'])) {
+            $students = $students->filter(function ($student) {
+                return stripos($student->code, $this->filters['search']) !== false ||
+                    stripos($student->fullname, $this->filters['search']) !== false;
+            });
+        }
+
+        if (!empty($this->filters['remarks'])) {
+            $student_ids = DB::table('term_grades')
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->where('term_id', '=', $this->detail['term_id'])
+                ->where('remarks', '=', $this->filters['remarks'])
+                ->pluck('student_id')
+                ->toArray();
+
+            $students = $students->whereIn('id', $student_ids);
+        }
+
+        // Get current term info
+        $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
+        $term_name = $current_term ? $current_term->term_name : 'Term';
+
+        // Prepare CSV content
+        $filename = 'evaluation_' . $term_name . '_' . $this->school_year . '_' . $this->semester . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.csv';
+
+        $headers = [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+        ];
+
+        $callback = function () use ($students, $term_name) {
+            $file = fopen('php://output', 'w');
+
+            // Add BOM for UTF-8
+            fprintf($file, chr(0xEF) . chr(0xBB) . chr(0xBF));
+
+            // Header row
+            $header = ['#', 'Student Code', 'Student Name', 'College', 'Department', 'Year Level'];
+
+            // Add school work type columns dynamically
+            foreach ($this->school_work_types as $swt) {
+                if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id) {
+                    $header[] = $swt->school_work_type . ' (%)';
+                }
+            }
+
+            $header[] = 'Total';
+            $header[] = 'Total Term Grade';
+
+            if ($this->schedule->is_lec) {
+                $header[] = 'Lecture';
+            }
+            if ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) {
+                $header[] = 'Laboratory';
+            }
+            $header[] = 'Total';
+            $header[] = 'Weighted Grade';
+            $header[] = 'Remarks';
+
+            fputcsv($file, $header);
+
+            // Get weight totals
+            $weight = DB::table('school_works_types')
+                ->select(DB::raw('sum(weight) as total_weight'))
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->where('term_id', '=', $this->detail['term_id'])
+                ->first();
+
+            $term_total = DB::table('terms')
+                ->select(DB::raw('sum(weight) as total'))
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->first();
+
+            // Data rows
+            $counter = 1;
+            foreach ($students as $student) {
+                $row = [
+                    $counter++,
+                    $student->code,
+                    $student->fullname,
+                    $student->college ?? 'N/A',
+                    $student->department ?? 'N/A',
+                    $student->year_level ?? 'N/A'
+                ];
+
+                // Calculate school work scores
+                $total_grade = 0;
+                $sub_average = 0;
+
+                foreach ($this->school_work_types as $key => $swt) {
+                    if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id) {
+                        $school_works = DB::table('school_works as sw')
+                            ->select('sw.id', 'sw.max_score', 'sws.score')
+                            ->leftJoin('school_work_scores as sws', 'sws.school_work_id', 'sw.id')
+                            ->where('sw.school_work_type_id', '=', $swt->id)
+                            ->where('sw.schedule_id', '=', $this->detail['schedule_id'])
+                            ->where('sw.term_id', '=', $this->detail['term_id'])
+                            ->where(function ($query) use ($student) {
+                                $query->whereNull('sws.student_id')
+                                    ->orWhere('sws.student_id', $student->id);
+                            })
+                            ->get();
+
+                        $school_work_count = 0;
+                        $school_work_average = 0;
+
+                        foreach ($school_works as $sw) {
+                            if ($sw->score !== null && $sw->max_score > 0) {
+                                $school_work_average += ($sw->score / $sw->max_score);
+                                $school_work_count++;
+                            }
+                        }
+
+                        if ($school_work_count > 0) {
+                            $sub_total = $school_work_average / $school_work_count;
+                            $percentage = number_format($sub_total * 100, 2, '.', '');
+                            $row[] = $percentage;
+
+                            $school_work_type_weight = $weight->total_weight ? ($swt->weight / $weight->total_weight * 100) : 0;
+                            $total_grade += ($sub_total * $school_work_type_weight / 100);
+                        } else {
+                            $row[] = '';
+                        }
+                    }
+                }
+
+                // Total column
+                $row[] = $total_grade > 0 ? number_format($total_grade * 100, 2, '.', '') : '';
+
+                // Total Term Grade
+                $term_grade_value = '';
+                if ($total_grade > 0 && $term_total && $term_total->total > 0) {
+                    $term_weight = $this->term_weight['weight'] ?? 100;
+                    $term_grade_value = number_format($total_grade * ($term_weight / $term_total->total * 100) / 100 * 100, 2, '.', '');
+                }
+                $row[] = $term_grade_value;
+
+                // Get lab/lec grades
+                $lab_lec_grades = DB::table('lab_lec_grades')
+                    ->where('schedule_id', '=', $this->detail['schedule_id'])
+                    ->where('student_id', '=', $student->id)
+                    ->first();
+
+                $total_lab_lec_grade = 0;
+                $total_lab_lec_grade_average = 0;
+
+                // Lecture Grade
+                if ($this->schedule->is_lec) {
+                    $total_lab_lec_grade_average += 1;
+                    if ($lab_lec_grades != null && floatval($lab_lec_grades->grade)) {
+                        $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
+                        $term_weight_percent = $current_term ? $current_term->weight : 100;
+                        $actual_grade_percent = ($lab_lec_grades->grade / $lab_lec_grades->sub_weight) * 100;
+                        $scaled_lecture_grade = ($actual_grade_percent / $term_weight_percent) * 10000;
+                        $total_lab_lec_grade += $scaled_lecture_grade;
+                        $row[] = number_format($scaled_lecture_grade, 2, '.', '');
+                    } else {
+                        $row[] = $lab_lec_grades ? $lab_lec_grades->other : '';
+                    }
+                }
+
+                // Laboratory Grade
+                if ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) {
+                    if (count($this->laboratory_schedules) > 0) {
+                        $lab_lec_grade = DB::table('lab_lec_grades')
+                            ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
+                            ->where('student_id', '=', $student->id)
+                            ->first();
+
+                        $total_lab_lec_grade_average += 1;
+
+                        if ($lab_lec_grade != null && floatval($lab_lec_grade->grade)) {
+                            $lab_grade_value = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100 * 100;
+                            $total_lab_lec_grade += $lab_grade_value;
+                            $row[] = number_format($lab_grade_value, 2, '.', '');
+                        } else {
+                            $row[] = $lab_lec_grade ? $lab_lec_grade->other : '';
+                        }
+                    }
+                }
+
+                // Total Grade
+                $final_grade = ($total_lab_lec_grade_average > 0 && floatval($total_lab_lec_grade))
+                    ? ($total_lab_lec_grade / $total_lab_lec_grade_average)
+                    : 0;
+                $row[] = $final_grade > 0 ? number_format($final_grade, 2, '.', '') : '';
+
+                // Weighted Grade
+                $weighted_grade = '';
+                if ($final_grade > 0) {
+                    foreach ($this->point_grade_equivalent as $p_value) {
+                        if ($final_grade >= $p_value->minimum && $final_grade < $p_value->maximum + 1) {
+                            $weighted_grade = $p_value->grade;
+                            break;
+                        }
+                    }
+                }
+                $row[] = $weighted_grade;
+
+                // Remarks
+                $term_grade_record = DB::table('term_grades')
+                    ->where('schedule_id', '=', $this->detail['schedule_id'])
+                    ->where('student_id', '=', $student->id)
+                    ->where('term_id', '=', $this->detail['term_id'])
+                    ->first();
+
+                $row[] = $term_grade_record && $term_grade_record->remarks
+                    ? $term_grade_record->remarks
+                    : 'N/A';
+
+                fputcsv($file, $row);
+            }
+
+            fclose($file);
+        };
+
+        return response()->stream($callback, 200, $headers);
+    }
+
+    public function exportExcel()
+    {
+        // Get all students for this schedule
+        $students = DB::table('enrolled_students as es')
+            ->select(
+                's.id',
+                's.code',
+                DB::raw('CONCAT_WS(" ", s.first_name, s.middle_name, s.last_name, s.suffix) AS fullname'),
+                'c.name as college',
+                'd.name as department',
+                'yl.year_level'
+            )
+            ->leftJoin('students as s', 's.id', 'es.student_id')
+            ->leftJoin('colleges as c', 'c.id', 's.college_id')
+            ->leftJoin('departments as d', 'd.id', 's.department_id')
+            ->leftJoin('year_levels as yl', 'yl.id', 's.year_level_id')
+            ->where('es.schedule_id', '=', $this->detail['schedule_id'])
+            ->orderBy('s.is_active', 'desc')
+            ->orderBy('s.id', 'desc')
+            ->get();
+
+        // Apply filters if set
+        if (!empty($this->filters['search'])) {
+            $students = $students->filter(function ($student) {
+                return stripos($student->code, $this->filters['search']) !== false ||
+                    stripos($student->fullname, $this->filters['search']) !== false;
+            });
+        }
+
+        if (!empty($this->filters['remarks'])) {
+            $student_ids = DB::table('term_grades')
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->where('term_id', '=', $this->detail['term_id'])
+                ->where('remarks', '=', $this->filters['remarks'])
+                ->pluck('student_id')
+                ->toArray();
+
+            $students = $students->whereIn('id', $student_ids);
+        }
+
+        // Get current term info
+        $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
+        $term_name = $current_term ? $current_term->term_name : 'Term';
+
+        // Create Excel content
+        $filename = 'evaluation_' . $term_name . '_' . $this->school_year . '_' . $this->semester . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.xls';
+
+        $headers = [
+            'Content-Type' => 'application/vnd.ms-excel',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+            'Pragma' => 'no-cache',
+            'Cache-Control' => 'must-revalidate, post-check=0, pre-check=0',
+            'Expires' => '0',
+        ];
+
+        $callback = function () use ($students, $term_name) {
+            echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
+            echo '<head>';
+            echo '<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">';
+            echo '<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>';
+            echo '<x:Name>Evaluation</x:Name>';
+            echo '<x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet>';
+            echo '</x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->';
+            echo '<style>';
+            echo 'table { border-collapse: collapse; width: 100%; }';
+            echo 'th, td { border: 1px solid black; padding: 8px; text-align: left; }';
+            echo 'th { background-color: #952323; color: white; font-weight: bold; }';
+            echo '.text-center { text-align: center; }';
+            echo '</style>';
+            echo '</head><body>';
+
+            // Add title and schedule info
+            echo '<h2>' . htmlspecialchars($term_name) . ' Evaluation Report</h2>';
+            echo '<p><strong>School Year:</strong> ' . htmlspecialchars($this->school_year) . '</p>';
+            echo '<p><strong>Semester:</strong> ' . htmlspecialchars($this->semester) . '</p>';
+            if ($this->schedule) {
+                echo '<p><strong>Subject:</strong> ' . htmlspecialchars($this->schedule->subject) . '</p>';
+                echo '<p><strong>Faculty:</strong> ' . htmlspecialchars($this->schedule->faculty_fullname) . '</p>';
+            }
+            echo '<br>';
+
+            echo '<table>';
+
+            // Header row
+            echo '<thead><tr>';
+            echo '<th>#</th>';
+            echo '<th>Student Code</th>';
+            echo '<th>Student Name</th>';
+            echo '<th>College</th>';
+            echo '<th>Department</th>';
+            echo '<th>Year Level</th>';
+
+            // Add school work type columns dynamically
+            foreach ($this->school_work_types as $swt) {
+                if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id) {
+                    echo '<th>' . htmlspecialchars($swt->school_work_type) . ' (%)</th>';
+                }
+            }
+
+            echo '<th>Total</th>';
+            echo '<th>Total Term Grade</th>';
+
+            if ($this->schedule->is_lec) {
+                echo '<th>Lecture</th>';
+            }
+            if ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) {
+                echo '<th>Laboratory</th>';
+            }
+            echo '<th>Total</th>';
+            echo '<th>Weighted Grade</th>';
+            echo '<th>Remarks</th>';
+            echo '</tr></thead><tbody>';
+
+            // Get weight totals
+            $weight = DB::table('school_works_types')
+                ->select(DB::raw('sum(weight) as total_weight'))
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->where('term_id', '=', $this->detail['term_id'])
+                ->first();
+
+            $term_total = DB::table('terms')
+                ->select(DB::raw('sum(weight) as total'))
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->first();
+
+            // Data rows
+            $counter = 1;
+            foreach ($students as $student) {
+                echo '<tr>';
+                echo '<td class="text-center">' . $counter++ . '</td>';
+                echo '<td>' . htmlspecialchars($student->code) . '</td>';
+                echo '<td>' . htmlspecialchars($student->fullname) . '</td>';
+                echo '<td>' . htmlspecialchars($student->college ?? 'N/A') . '</td>';
+                echo '<td>' . htmlspecialchars($student->department ?? 'N/A') . '</td>';
+                echo '<td>' . htmlspecialchars($student->year_level ?? 'N/A') . '</td>';
+
+                // Calculate school work scores
+                $total_grade = 0;
+
+                foreach ($this->school_work_types as $key => $swt) {
+                    if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id) {
+                        $school_works = DB::table('school_works as sw')
+                            ->select('sw.id', 'sw.max_score', 'sws.score')
+                            ->leftJoin('school_work_scores as sws', 'sws.school_work_id', 'sw.id')
+                            ->where('sw.school_work_type_id', '=', $swt->id)
+                            ->where('sw.schedule_id', '=', $this->detail['schedule_id'])
+                            ->where('sw.term_id', '=', $this->detail['term_id'])
+                            ->where(function ($query) use ($student) {
+                                $query->whereNull('sws.student_id')
+                                    ->orWhere('sws.student_id', $student->id);
+                            })
+                            ->get();
+
+                        $school_work_count = 0;
+                        $school_work_average = 0;
+
+                        foreach ($school_works as $sw) {
+                            if ($sw->score !== null && $sw->max_score > 0) {
+                                $school_work_average += ($sw->score / $sw->max_score);
+                                $school_work_count++;
+                            }
+                        }
+
+                        if ($school_work_count > 0) {
+                            $sub_total = $school_work_average / $school_work_count;
+                            echo '<td class="text-center">' . number_format($sub_total * 100, 2, '.', '') . '</td>';
+
+                            $school_work_type_weight = $weight->total_weight ? ($swt->weight / $weight->total_weight * 100) : 0;
+                            $total_grade += ($sub_total * $school_work_type_weight / 100);
+                        } else {
+                            echo '<td class="text-center"></td>';
+                        }
+                    }
+                }
+
+                // Total column
+                echo '<td class="text-center">' . ($total_grade > 0 ? number_format($total_grade * 100, 2, '.', '') : '') . '</td>';
+
+                // Total Term Grade
+                $term_grade_value = '';
+                if ($total_grade > 0 && $term_total && $term_total->total > 0) {
+                    $term_weight = $this->term_weight['weight'] ?? 100;
+                    $term_grade_value = number_format($total_grade * ($term_weight / $term_total->total * 100) / 100 * 100, 2, '.', '');
+                }
+                echo '<td class="text-center">' . $term_grade_value . '</td>';
+
+                // Get lab/lec grades
+                $lab_lec_grades = DB::table('lab_lec_grades')
+                    ->where('schedule_id', '=', $this->detail['schedule_id'])
+                    ->where('student_id', '=', $student->id)
+                    ->first();
+
+                $total_lab_lec_grade = 0;
+                $total_lab_lec_grade_average = 0;
+
+                // Lecture Grade
+                if ($this->schedule->is_lec) {
+                    $total_lab_lec_grade_average += 1;
+                    if ($lab_lec_grades != null && floatval($lab_lec_grades->grade)) {
+                        $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
+                        $term_weight_percent = $current_term ? $current_term->weight : 100;
+                        $actual_grade_percent = ($lab_lec_grades->grade / $lab_lec_grades->sub_weight) * 100;
+                        $scaled_lecture_grade = ($actual_grade_percent / $term_weight_percent) * 10000;
+                        $total_lab_lec_grade += $scaled_lecture_grade;
+                        echo '<td class="text-center">' . number_format($scaled_lecture_grade, 2, '.', '') . '</td>';
+                    } else {
+                        echo '<td class="text-center">' . htmlspecialchars($lab_lec_grades ? $lab_lec_grades->other : '') . '</td>';
+                    }
+                }
+
+                // Laboratory Grade
+                if ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) {
+                    if (count($this->laboratory_schedules) > 0) {
+                        $lab_lec_grade = DB::table('lab_lec_grades')
+                            ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
+                            ->where('student_id', '=', $student->id)
+                            ->first();
+
+                        $total_lab_lec_grade_average += 1;
+
+                        if ($lab_lec_grade != null && floatval($lab_lec_grade->grade)) {
+                            $lab_grade_value = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100 * 100;
+                            $total_lab_lec_grade += $lab_grade_value;
+                            echo '<td class="text-center">' . number_format($lab_grade_value, 2, '.', '') . '</td>';
+                        } else {
+                            echo '<td class="text-center">' . htmlspecialchars($lab_lec_grade ? $lab_lec_grade->other : '') . '</td>';
+                        }
+                    }
+                }
+
+                // Total Grade
+                $final_grade = ($total_lab_lec_grade_average > 0 && floatval($total_lab_lec_grade))
+                    ? ($total_lab_lec_grade / $total_lab_lec_grade_average)
+                    : 0;
+                echo '<td class="text-center">' . ($final_grade > 0 ? number_format($final_grade, 2, '.', '') : '') . '</td>';
+
+                // Weighted Grade
+                $weighted_grade = '';
+                if ($final_grade > 0) {
+                    foreach ($this->point_grade_equivalent as $p_value) {
+                        if ($final_grade >= $p_value->minimum && $final_grade < $p_value->maximum + 1) {
+                            $weighted_grade = $p_value->grade;
+                            break;
+                        }
+                    }
+                }
+                echo '<td class="text-center">' . htmlspecialchars($weighted_grade) . '</td>';
+
+                // Remarks
+                $term_grade_record = DB::table('term_grades')
+                    ->where('schedule_id', '=', $this->detail['schedule_id'])
+                    ->where('student_id', '=', $student->id)
+                    ->where('term_id', '=', $this->detail['term_id'])
+                    ->first();
+
+                $remarks = $term_grade_record && $term_grade_record->remarks
+                    ? $term_grade_record->remarks
+                    : 'N/A';
+
+                $bg_color = match ($remarks) {
+                    'PASSED' => '#198754',
+                    'FAILED' => '#dc3545',
+                    'INC' => '#ffc107',
+                    'DROP' => '#6c757d',
+                    default => '#f8f9fa'
+                };
+
+                $text_color = match ($remarks) {
+                    'PASSED' => '#ffffff',
+                    'FAILED' => '#ffffff',
+                    'INC' => '#000000',
+                    'DROP' => '#ffffff',
+                    default => '#000000'
+                };
+
+                echo '<td class="text-center" style="background-color: ' . $bg_color . '; color: ' . $text_color . '; font-weight: bold;">' .
+                    htmlspecialchars($remarks) .
+                    '</td>';
+
+                echo '</tr>';
+            }
+
+            echo '</tbody></table>';
+            echo '<br><p><em>Generated on: ' . now()->timezone('Asia/Manila')->format('F d, Y h:i A') . ' </em></p>';
+            echo '</body></html>';
+        };
+
+        return response()->stream($callback, 200, $headers);
+    }
 }
