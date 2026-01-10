@@ -768,6 +768,7 @@ class FacultyEvaluationLists extends Component
             ''
         );
         $this->dispatch('closeModal', modal_id: $modal_id);
+        self::updateFinalGrades();
     }
 
     public function updateLabLecGrades($lab_lec_id, $student_id, $var)
@@ -786,7 +787,7 @@ class FacultyEvaluationLists extends Component
                 'Updated successfully!',
                 ''
             );
-            self::updateFinalGrades();
+            self::calculateAndStoreFinalGrade($student_id);
         }
     }
 
@@ -1085,7 +1086,7 @@ class FacultyEvaluationLists extends Component
         );
 
         self::autoUpdateRemarks();
-        self::updateFinalGrades();
+        self::calculateAndStoreFinalGrade($student_id);
     }
 
     public function open_term_weight($modal_id)
@@ -1157,6 +1158,7 @@ class FacultyEvaluationLists extends Component
             ''
         );
         self::terms($this->detail['schedule_id']);
+        self::updateFinalGrades();
     }
 
     public function viewAttendance($modal_id)
@@ -1204,6 +1206,7 @@ class FacultyEvaluationLists extends Component
         }
 
         $this->dispatch('notifySuccess', 'Remarks updated successfully!', '');
+        self::calculateAndStoreFinalGrade($student_id);
     }
 
     /**
@@ -1386,11 +1389,13 @@ class FacultyEvaluationLists extends Component
     }
 
     /**
-     * NEW METHOD: Calculate and store final grade for a specific student
+     * Calculate and store final grade for a specific student
+     * Includes both Lecture and Laboratory grades
      */
-    private function calculateAndStoreFinalGrade($student_id)
+    public function calculateAndStoreFinalGrade($student_id)
     {
         $total_lecture_grade = 0;
+        $total_laboratory_grade = 0;
         $term_count = 0;
 
         // Get all terms for this schedule
@@ -1399,7 +1404,10 @@ class FacultyEvaluationLists extends Component
             ->orderBy('term_order', 'asc')
             ->get();
 
-        // For each term, calculate the lecture grade value shown in UI
+        // Track if we have any valid grades
+        $has_any_grades = false;
+
+        // For each term, calculate the lecture and laboratory grade values
         foreach ($all_terms as $term) {
             // Check if student has INC or DROP for this specific term
             $term_grade = DB::table('term_grades')
@@ -1408,41 +1416,204 @@ class FacultyEvaluationLists extends Component
                 ->where('term_id', '=', $term->id)
                 ->first();
 
-            // Skip this term if student has INC or DROP
-            if ($term_grade && ($term_grade->other == 'INC' || $term_grade->other == 'DROP')) {
-                continue;
-            }
-
-            // Get the lab_lec_grades record
+            // Get the lab_lec_grades record for lecture
             $lab_lec_grade = DB::table('lab_lec_grades')
                 ->where('schedule_id', '=', $this->detail['schedule_id'])
                 ->where('student_id', '=', $student_id)
                 ->first();
 
-            // Skip if lab_lec_grade has INC or DROP
-            if ($lab_lec_grade && ($lab_lec_grade->other == 'INC' || $lab_lec_grade->other == 'DROP')) {
-                continue;
+            // Track this term for counting
+            $term_has_data = false;
+
+            // Calculate the LECTURE value for THIS TERM (if applicable)
+            if ($this->schedule && $this->schedule->is_lec) {
+                if ($term_grade && floatval($term_grade->grade)) {
+                    // Get current term weight
+                    $term_weight_percent = $term->weight;
+
+                    // Calculate the actual grade for this term (0-100 scale)
+                    $term_lecture_value = ($term_grade->grade / ($term_weight_percent / 100)) * 100;
+
+                    // Add to cumulative total
+                    $total_lecture_grade += $term_lecture_value;
+                    $term_has_data = true;
+                    $has_any_grades = true;
+                }
             }
 
-            // Calculate the lecture value for THIS TERM (matches UI "Lecture" column)
-            if ($term_grade && floatval($term_grade->grade)) {
-                // Get current term weight
-                $term_weight_percent = $term->weight;
+            // Calculate the LABORATORY value for THIS TERM (if applicable)
+            if ($this->schedule && ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0)) {
+                if (count($this->laboratory_schedules) > 0) {
+                    $lab_lec_grade_lab = DB::table('lab_lec_grades')
+                        ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
+                        ->where('student_id', '=', $student_id)
+                        ->first();
 
-                // Calculate the actual grade for this term (0-100 scale)
-                // This matches what's shown in the "Lecture" column in your UI
-                $term_lecture_value = ($term_grade->grade / ($term_weight_percent / 100)) * 100;
+                    if ($lab_lec_grade_lab != null && floatval($lab_lec_grade_lab->grade)) {
+                        // Calculate laboratory grade scaled to 100
+                        $term_laboratory_value = ($lab_lec_grade_lab->grade / $lab_lec_grade_lab->sub_weight) * 100 * 100;
 
-                // Add to cumulative total
-                $total_lecture_grade += $term_lecture_value;
+                        // Add to cumulative total
+                        $total_laboratory_grade += $term_laboratory_value;
+                        $term_has_data = true;
+                        $has_any_grades = true;
+                    }
+                }
+            }
+
+            // Only count this term if it had valid data
+            if ($term_has_data) {
                 $term_count++;
             }
         }
 
-        // Calculate final average: (Midterm Lecture + Finalterm Lecture) / 2
+        // Calculate final averages
         $final_lecture_value = null;
+        $final_laboratory_value = null;
+        $total_grade = null;
+        $weighted_grade = null;
+        $remarks = null;
+
         if ($term_count > 0) {
-            $final_lecture_value = $total_lecture_grade / $term_count;
+            if ($this->schedule && $this->schedule->is_lec && $total_lecture_grade > 0) {
+                $final_lecture_value = $total_lecture_grade / $term_count;
+            }
+
+            if ($this->schedule && ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) && $total_laboratory_grade > 0) {
+                $final_laboratory_value = $total_laboratory_grade / $term_count;
+            }
+        }
+
+        // Calculate total grade (handle null/empty values)
+        if ($final_lecture_value !== null && $final_laboratory_value !== null) {
+            // Both lecture and laboratory exist - average them
+            $total_grade = ($final_lecture_value + $final_laboratory_value) / 2;
+        } elseif ($final_lecture_value !== null) {
+            // Only lecture exists
+            $total_grade = $final_lecture_value;
+        } elseif ($final_laboratory_value !== null) {
+            // Only laboratory exists
+            $total_grade = $final_laboratory_value;
+        }
+
+        // Calculate weighted grade and remarks based on total grade
+        if ($total_grade !== null && $total_grade > 0) {
+            // Check if any term has INC status (across all terms, not just valid ones)
+            $has_inc = DB::table('term_grades')
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->where('student_id', '=', $student_id)
+                ->where('other', '=', 'INC')
+                ->exists();
+
+            $has_lab_inc = false;
+            if (count($this->laboratory_schedules) > 0) {
+                $has_lab_inc = DB::table('lab_lec_grades')
+                    ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
+                    ->where('student_id', '=', $student_id)
+                    ->where('other', '=', 'INC')
+                    ->exists();
+            }
+
+            // Check if any term has DROP status (across all terms, not just valid ones)
+            $has_drop = DB::table('term_grades')
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->where('student_id', '=', $student_id)
+                ->where('other', '=', 'DROP')
+                ->exists();
+
+            $has_lab_drop = false;
+            if (count($this->laboratory_schedules) > 0) {
+                $has_lab_drop = DB::table('lab_lec_grades')
+                    ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
+                    ->where('student_id', '=', $student_id)
+                    ->where('other', '=', 'DROP')
+                    ->exists();
+            }
+
+            // Determine remarks based on priority
+            if ($has_inc || $has_lab_inc) {
+                $remarks = 'INC';
+                // Still calculate weighted grade even for INC
+                $grade_equivalent = DB::table('point_grade_equivalent')
+                    ->where('minimum', '<=', $total_grade)
+                    ->where('maximum', '>=', $total_grade)
+                    ->first();
+
+                if ($grade_equivalent) {
+                    $weighted_grade = floatval($grade_equivalent->grade);
+                }
+            } elseif ($has_drop || $has_lab_drop) {
+                $remarks = 'DROP';
+                // Still calculate weighted grade even for DROP
+                $grade_equivalent = DB::table('point_grade_equivalent')
+                    ->where('minimum', '<=', $total_grade)
+                    ->where('maximum', '>=', $total_grade)
+                    ->first();
+
+                if ($grade_equivalent) {
+                    $weighted_grade = floatval($grade_equivalent->grade);
+                }
+            } else {
+                // Find weighted grade from point_grade_equivalent table
+                $grade_equivalent = DB::table('point_grade_equivalent')
+                    ->where('minimum', '<=', $total_grade)
+                    ->where('maximum', '>=', $total_grade)
+                    ->first();
+
+                if ($grade_equivalent) {
+                    $weighted_grade = floatval($grade_equivalent->grade);
+
+                    // Determine PASSED or FAILED (3.0 is typically the passing grade)
+                    $passing_grade = 3.0;
+                    if ($weighted_grade <= $passing_grade) {
+                        $remarks = 'PASSED';
+                    } else {
+                        $remarks = 'FAILED';
+                    }
+                } else {
+                    // Fallback if not found in table
+                    $weighted_grade = null;
+                    $remarks = $total_grade >= 75 ? 'PASSED' : 'FAILED';
+                }
+            }
+        } elseif ($has_any_grades) {
+            // Student has some grades but they resulted in 0 or null total
+            // Still check for INC/DROP status
+            $has_inc = DB::table('term_grades')
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->where('student_id', '=', $student_id)
+                ->where('other', '=', 'INC')
+                ->exists();
+
+            $has_lab_inc = false;
+            if (count($this->laboratory_schedules) > 0) {
+                $has_lab_inc = DB::table('lab_lec_grades')
+                    ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
+                    ->where('student_id', '=', $student_id)
+                    ->where('other', '=', 'INC')
+                    ->exists();
+            }
+
+            $has_drop = DB::table('term_grades')
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->where('student_id', '=', $student_id)
+                ->where('other', '=', 'DROP')
+                ->exists();
+
+            $has_lab_drop = false;
+            if (count($this->laboratory_schedules) > 0) {
+                $has_lab_drop = DB::table('lab_lec_grades')
+                    ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
+                    ->where('student_id', '=', $student_id)
+                    ->where('other', '=', 'DROP')
+                    ->exists();
+            }
+
+            if ($has_inc || $has_lab_inc) {
+                $remarks = 'INC';
+            } elseif ($has_drop || $has_lab_drop) {
+                $remarks = 'DROP';
+            }
         }
 
         // Store or update the final grade record
@@ -1458,6 +1629,10 @@ class FacultyEvaluationLists extends Component
                 ->where('student_id', '=', $student_id)
                 ->update([
                     'lecture_grade' => $final_lecture_value,
+                    'laboratory_grade' => $final_laboratory_value,
+                    'total_grade' => $total_grade,
+                    'weighted_grade' => $weighted_grade,
+                    'remarks' => $remarks,
                     'updated_at' => now(),
                 ]);
         } else {
@@ -1467,7 +1642,10 @@ class FacultyEvaluationLists extends Component
                     'schedule_id' => $this->detail['schedule_id'],
                     'student_id' => $student_id,
                     'lecture_grade' => $final_lecture_value,
-                    'laboratory_grade' => null,
+                    'laboratory_grade' => $final_laboratory_value,
+                    'total_grade' => $total_grade,
+                    'weighted_grade' => $weighted_grade,
+                    'remarks' => $remarks,
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);

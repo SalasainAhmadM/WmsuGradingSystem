@@ -15,13 +15,60 @@
             </button>
         </div>
     </div>
+    <style>
+    /* Remarks badge styling (non-dropdown version) */
+    .badge-remarks {
+        padding: 0.35rem 0.65rem;
+        font-weight: 500;
+        border-radius: 0.25rem;
+        display: inline-block;
+        min-width: 80px;
+        text-align: center;
+    }
+    
+    .badge-remarks.bg-success {
+        background-color: #198754 !important;
+        color: white !important;
+    }
+    
+    .badge-remarks.bg-danger {
+        background-color: #dc3545 !important;
+        color: white !important;
+    }
+    
+    .badge-remarks.bg-warning {
+        background-color: #ffc107 !important;
+        color: #000 !important;
+    }
+    
+    .badge-remarks.bg-secondary {
+        background-color: #6c757d !important;
+        color: white !important;
+    }
+    
+    .badge-remarks.bg-light {
+        background-color: #f8f9fa !important;
+        color: #000 !important;
+        border: 1px solid #dee2e6 !important;
+    }
+</style>
     <div class="container-fluid">
         <div class="table-header">
             <livewire:admin.BreadCrumb.BreadCrumb/>
         </div>
         <div class="d-flex justify-content-between my-2 gap-2 row">
-            <div class="col-4">
+            <div class="col-3">
                 <input type="search" wire:model.live="filters.search" name="" id="" placeholder="Search ... " class="form-control">
+            </div>
+            <div class="col-2 d-flex justify-items-start gap-1">
+                <label for="" class="mt-2">Remarks</label>
+                <select name="" id="" class="form-control" wire:model.live="filters.remarks">
+                    <option value="">All</option>
+                    <option value="PASSED">PASSED</option>
+                    <option value="FAILED">FAILED</option>
+                    <option value="INC">INC</option>
+                    <option value="DROP">DROP</option>
+                </select>
             </div>
             <div class="d-flex col justify-content-end gap-2">
                 @if ($schedule->is_lec && $schedule->laboratory_unit >0)
@@ -68,7 +115,7 @@
                                     ->where('term_id','=',$this->detail['term_id'])
                                     ->first();
                             @endphp
-                            <th colspan="4">
+                            <th colspan="5">
                                 Final Grade
                             </th>
                         </tr>
@@ -105,103 +152,107 @@
                             @endif
                                 <th scope="col" class="">Total</th>
                                 <th scope="col" class="">Weighted Grade</th>
+                                <th scope="col" class="">Remarks</th>
                         </tr>
                     </thead>
+
                     <tbody>
-                        @forelse($table_data as $key =>$value)
+                        @forelse($table_data as $key => $value)
                             <tr class="align-middle">
-                                <th scope="row" class="px-4">{{($table_data->currentPage()-1)*$table_data->perPage()+$key+1 }}</th>
+                                <th scope="row" class="px-4">
+                                    {{ ($table_data->currentPage()-1) * $table_data->perPage() + $key + 1 }}
+                                </th>
                                 <td class="text-start">
                                     <div class="d-flex justify-content-between align-items-center">
                                         <a href="/faculty/students/view-{{ $value->id }}" target="_blank">
-                                            <span>
-                                                {{$value->code.' - '.$value->fullname}}
-                                            </span>
+                                            <span>{{ $value->code.' - '.$value->fullname }}</span>
                                         </a>
-                                        <a href="/faculty/students/view-{{ $value->id }}/schedule-{{ $detail['schedule_id'] }}/" class="btn btn-outline-secondary" target="_blank">
+                                        <a href="/faculty/students/view-{{ $value->id }}/schedule-{{ $detail['schedule_id'] }}/" 
+                                        class="btn btn-outline-secondary" target="_blank">
                                             <span>
-                                                <svg viewBox="0 0 1024 1024" width="20px" class="icon" version="1.1" xmlns="http://www.w3.org/2000/svg" fill="#000000"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"><path d="M981.333333 960h-21.333333V576a21.333333 21.333333 0 0 0-42.666667 0v384h-128V213.333333a42.666667 42.666667 0 0 1 42.666667-42.666666h42.666667a42.666667 42.666667 0 0 1 42.666666 42.666666v21.333334a21.333333 21.333333 0 0 0 42.666667 0v-21.333334a85.333333 85.333333 0 0 0-85.333333-85.333333h-42.666667a85.333333 85.333333 0 0 0-85.333333 85.333333v746.666667h-85.333334V426.666667a85.333333 85.333333 0 0 0-85.333333-85.333334h-42.666667a85.333333 85.333333 0 0 0-85.333333 85.333334v533.333333h-85.333333V640a85.333333 85.333333 0 0 0-85.333334-85.333333h-42.666666a85.333333 85.333333 0 0 0-85.333334 85.333333v320H64V42.666667a21.333333 21.333333 0 0 0-42.666667 0v938.666666a21.333333 21.333333 0 0 0 21.333334 21.333334h938.666666a21.333333 21.333333 0 0 0 0-42.666667z m-661.333333 0H192V640a42.666667 42.666667 0 0 1 42.666667-42.666667h42.666666a42.666667 42.666667 0 0 1 42.666667 42.666667z m298.666667 0h-128V426.666667a42.666667 42.666667 0 0 1 42.666666-42.666667h42.666667a42.666667 42.666667 0 0 1 42.666667 42.666667z" fill="currentColor"></path><path d="M938.666667 384a21.333333 21.333333 0 0 0-21.333334 21.333333v85.333334a21.333333 21.333333 0 0 0 42.666667 0v-85.333334a21.333333 21.333333 0 0 0-21.333333-21.333333zM958.293333 311.893333a24.533333 24.533333 0 0 0-4.48-7.04l-3.2-2.56a16.213333 16.213333 0 0 0-3.84-1.92L942.933333 298.666667a21.333333 21.333333 0 0 0-12.373333 1.28 19.2 19.2 0 0 0-11.52 11.52 21.333333 21.333333 0 0 0-1.706667 8.533333 21.333333 21.333333 0 0 0 6.186667 15.146667 21.333333 21.333333 0 0 0 7.04 4.48A21.333333 21.333333 0 0 0 938.666667 341.333333a21.333333 21.333333 0 0 0 15.146666-6.186666A22.4 22.4 0 0 0 960 320a21.333333 21.333333 0 0 0-1.706667-8.106667z" fill="currentColor"></path></g></svg>
+                                                <svg viewBox="0 0 1024 1024" width="20px" class="icon" version="1.1" xmlns="http://www.w3.org/2000/svg" fill="#000000">
+                                                    <g id="SVGRepo_bgCarrier" stroke-width="0"></g>
+                                                    <g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g>
+                                                    <g id="SVGRepo_iconCarrier">
+                                                        <path d="M981.333333 960h-21.333333V576a21.333333 21.333333 0 0 0-42.666667 0v384h-128V213.333333a42.666667 42.666667 0 0 1 42.666667-42.666666h42.666667a42.666667 42.666667 0 0 1 42.666666 42.666666v21.333334a21.333333 21.333333 0 0 0 42.666667 0v-21.333334a85.333333 85.333333 0 0 0-85.333333-85.333333h-42.666667a85.333333 85.333333 0 0 0-85.333333 85.333333v746.666667h-85.333334V426.666667a85.333333 85.333333 0 0 0-85.333333-85.333334h-42.666667a85.333333 85.333333 0 0 0-85.333333 85.333334v533.333333h-85.333333V640a85.333333 85.333333 0 0 0-85.333334-85.333333h-42.666666a85.333333 85.333333 0 0 0-85.333334 85.333333v320H64V42.666667a21.333333 21.333333 0 0 0-42.666667 0v938.666666a21.333333 21.333333 0 0 0 21.333334 21.333334h938.666666a21.333333 21.333333 0 0 0 0-42.666667z m-661.333333 0H192V640a42.666667 42.666667 0 0 1 42.666667-42.666667h42.666666a42.666667 42.666667 0 0 1 42.666667 42.666667z m298.666667 0h-128V426.666667a42.666667 42.666667 0 0 1 42.666666-42.666667h42.666667a42.666667 42.666667 0 0 1 42.666667 42.666667z" fill="currentColor"></path>
+                                                        <path d="M938.666667 384a21.333333 21.333333 0 0 0-21.333334 21.333333v85.333334a21.333333 21.333333 0 0 0 42.666667 0v-85.333334a21.333333 21.333333 0 0 0-21.333333-21.333333zM958.293333 311.893333a24.533333 24.533333 0 0 0-4.48-7.04l-3.2-2.56a16.213333 16.213333 0 0 0-3.84-1.92L942.933333 298.666667a21.333333 21.333333 0 0 0-12.373333 1.28 19.2 19.2 0 0 0-11.52 11.52 21.333333 21.333333 0 0 0-1.706667 8.533333 21.333333 21.333333 0 0 0 6.186667 15.146667 21.333333 21.333333 0 0 0 7.04 4.48A21.333333 21.333333 0 0 0 938.666667 341.333333a21.333333 21.333333 0 0 0 15.146666-6.186666A22.4 22.4 0 0 0 960 320a21.333333 21.333333 0 0 0-1.706667-8.106667z" fill="currentColor"></path>
+                                                    </g>
+                                                </svg>
                                             </span>
                                         </a>
                                     </div>
                                 </td>
+                                
+                                {{-- Get final grades data from the final_grades array --}}
                                 @php
-                                    $total_grade = 0;
-                                    $total_lab_lec_grade = 0;
-                                    $total_lab_lec_grade_average = 0;
+                                    $student_final_grade = isset($final_grades[$value->id]) ? $final_grades[$value->id] : null;
                                 @endphp
+                                
+                                {{-- Lecture Grade --}}
                                 @if($schedule->is_lec)
-                                    <th scope="col" class="">
-                                        @php 
-                                            $total_lab_lec_grade_average += 1;
-                                            $lab_lec_grade = DB::table('lab_lec_grades')
-                                                ->where('schedule_id','=', $detail['schedule_id'])
-                                                ->where('student_id','=',$value->id)
-                                                ->first();
-                                        @endphp
-                                         @if($lab_lec_grade != null && floatval($lab_lec_grade->grade))
-                                            {{ number_format(($lab_lec_grade->grade/$lab_lec_grade->sub_weight)*100*100, 2, '.', '') }}
-                                            @php 
-                                                $total_lab_lec_grade +=  floatval($lab_lec_grade->grade) ? floatval($lab_lec_grade->grade/$lab_lec_grade->sub_weight * 100 * 100):0;
-                                            @endphp
+                                    <td class="text-center">
+                                        @if($student_final_grade && $student_final_grade['lecture_grade'] !== null)
+                                            {{ number_format($student_final_grade['lecture_grade'], 2, '.', '') }}
                                         @else
-                                            {{$lab_lec_grade ? $lab_lec_grade->other : ""}}    
+                                            <span class="text-muted">--</span>
                                         @endif
-                                    </th>
+                                    </td>
                                 @endif
-                                @if($schedule->laboratory_unit>0 || $schedule->is_lec == 0)
-                                    <th scope="col" class="">
-                                        @php 
-                                            $lab_lec_grade = DB::table('lab_lec_grades')
-                                                ->where('schedule_id','=', $laboratory_schedules[0]->id)
-                                                ->where('student_id','=',$value->id)
-                                                ->first();                                            
-                                            $total_lab_lec_grade_average += 1;
-                                        @endphp
-                                         @if($lab_lec_grade != null && floatval($lab_lec_grade->grade))
-
-                                            {{ number_format(($lab_lec_grade->grade/$lab_lec_grade->sub_weight)*100*100, 2, '.', '') }}
-                                            @php 
-                                                $total_lab_lec_grade +=  floatval($lab_lec_grade->grade) ? floatval($lab_lec_grade->grade/$lab_lec_grade->sub_weight * 100 * 100):0;
-                                            @endphp
+                                
+                                {{-- Laboratory Grade --}}
+                                @if($schedule->laboratory_unit > 0 || $schedule->is_lec == 0)
+                                    <td class="text-center">
+                                        @if($student_final_grade && $student_final_grade['laboratory_grade'] !== null)
+                                            {{ number_format($student_final_grade['laboratory_grade'], 2, '.', '') }}
                                         @else
-                                            {{$lab_lec_grade ? $lab_lec_grade->other : ""}}    
+                                            <span class="text-muted">--</span>
                                         @endif
-                                    </th>
+                                    </td>
                                 @endif
-                                <th scope="col" class="">
-                                    @if(floatval($total_lab_lec_grade))
-                                        {{ number_format(($total_lab_lec_grade/$total_lab_lec_grade_average), 2, '.', '') }}
+                                
+                                {{-- Total Grade --}}
+                                <td class="text-center">
+                                    @if($student_final_grade && $student_final_grade['total_grade'] !== null)
+                                        {{ number_format($student_final_grade['total_grade'], 2, '.', '') }}
                                     @else
-                                        0   
+                                        <span class="text-muted">--</span>
                                     @endif
-                                </th>
-                               
-                                <th scope="col" class="">
-                                    @if(floatval($total_lab_lec_grade))
+                                </td>
+                                
+                                {{-- Weighted Grade --}}
+                                <td class="text-center">
+                                    @if($student_final_grade && $student_final_grade['weighted_grade'] !== null)
+                                        {{ number_format($student_final_grade['weighted_grade'], 2, '.', '') }}
+                                    @else
+                                        <span class="text-muted">--</span>
+                                    @endif
+                                </td>
+
+                                <td class="text-center">
+                                    @if($student_final_grade && $student_final_grade['remarks'])
                                         @php
-                                        $point_grade = true;
+                                            $badge_class = match($student_final_grade['remarks']) {
+                                                'PASSED' => 'bg-success',
+                                                'FAILED' => 'bg-danger',
+                                                'INC' => 'bg-warning',
+                                                'DROP' => 'bg-secondary',
+                                                default => 'bg-light'
+                                            };
                                         @endphp
-                                        @foreach($point_grade_equivalent as $p_value)
-                                            @if(($total_lab_lec_grade/$total_lab_lec_grade_average) >$p_value->minimum  && $total_lab_lec_grade/$total_lab_lec_grade_average < $p_value->maximum+1)
-                                                {{ $p_value->grade }}
-                                                @php
-                                                    $point_grade = false;
-                                                @endphp
-                                            @endif
-                                        @endforeach
-                                        @if($point_grade)
-                                            N/A
-                                        @endif
-                                    @else 
-                                        0
+                                        <span class="badge-remarks {{ $badge_class }}">
+                                            {{ $student_final_grade['remarks'] }}
+                                        </span>
+                                    @else
+                                        <span class="badge-remarks bg-light">N/A</span>
                                     @endif
-                                </th>
+                                </td>
                             </tr>
                         @empty
                             <tr class="align-middle">
-                                <td colspan="42">
-                                    <div class="alert alert-danger d-flex justify-content-center">No records found!</div>
+                                <td colspan="20">
+                                    <div class="alert alert-danger d-flex justify-content-center">
+                                        No records found!
+                                    </div>
                                 </td>
                             </tr>
                         @endforelse
