@@ -90,6 +90,7 @@
                     <option value="DROP">DROP</option>
                 </select>
             </div>
+            @if($schedule && $schedule->is_lec == 1)
             <div class="col">
                 <a href="{{ route('my-evaluation-lists-final-grading',[
                         'school_year' => $school_year,
@@ -98,6 +99,7 @@
                     Final Grading
                 </a>
             </div>
+            @endif
             <div class="d-flex col justify-content-end gap-2">
             @if ($schedule->is_lec && $schedule->laboratory_unit >0)
                 <button class="btn btn-outline-secondary" 
@@ -511,7 +513,7 @@
 
 <td>
     @if(floatval($grade) && !$inc)
-        {{ number_format($grade*100, 2, '.', '') }}
+        {{ number_format($total_grade * 100, 2, '.', '') }}
     @else
         @if($lab_lec_grades)
             @php

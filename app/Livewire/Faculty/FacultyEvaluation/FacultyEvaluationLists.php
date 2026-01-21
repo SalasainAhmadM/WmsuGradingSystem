@@ -788,6 +788,7 @@ class FacultyEvaluationLists extends Component
                 ''
             );
             self::calculateAndStoreFinalGrade($student_id);
+            self::autoUpdateRemarks();
         }
     }
 
@@ -1085,8 +1086,8 @@ class FacultyEvaluationLists extends Component
             ''
         );
 
-        self::autoUpdateRemarks();
         self::calculateAndStoreFinalGrade($student_id);
+        self::autoUpdateRemarks();
     }
 
     public function open_term_weight($modal_id)
