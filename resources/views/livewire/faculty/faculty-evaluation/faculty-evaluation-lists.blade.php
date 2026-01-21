@@ -576,14 +576,29 @@
             $lab_lec_grade = DB::table('lab_lec_grades')
                 ->where('schedule_id','=', $laboratory_schedules[0]->id ?? null)
                 ->where('student_id','=',$value->id)
-                ->first();                                            
+                ->first();
+            
             $total_lab_lec_grade_average += 1;
+            
+            // Get current term weight to scale the laboratory grade
+            $current_term = collect($terms)->firstWhere('id', $detail['term_id']);
+            $term_weight_percent = $current_term ? $current_term->weight : 100;
+            
+            // Calculate scaled laboratory grade
+            $scaled_laboratory_grade = 0;
+            if($lab_lec_grade != null && floatval($lab_lec_grade->grade)){
+                // Get the actual grade percentage (0-100 scale based on term weight)
+                $actual_lab_grade_percent = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100;
+                
+                // Scale it to 100 based on term weight
+                // Formula: (actual_grade / term_weight) * 100
+                $scaled_laboratory_grade = ($actual_lab_grade_percent / $term_weight_percent) * 10000;
+                
+                $total_lab_lec_grade += $scaled_laboratory_grade;
+            }
         @endphp
         @if($lab_lec_grade != null && floatval($lab_lec_grade->grade))
-            {{ number_format(($lab_lec_grade->grade/$lab_lec_grade->sub_weight)*100*100, 2, '.', '') }}
-            @php 
-                $total_lab_lec_grade += floatval($lab_lec_grade->grade) ? floatval($lab_lec_grade->grade/$lab_lec_grade->sub_weight * 100 * 100) : 0;
-            @endphp
+            {{ number_format($scaled_laboratory_grade, 2, '.', '') }}
         @else
             {{$lab_lec_grade ? $lab_lec_grade->other : ""}}    
         @endif
