@@ -512,22 +512,26 @@
 @endphp
 
 <td>
-    @if(floatval($grade) && !$inc)
-        {{ number_format($total_grade * 100, 2, '.', '') }}
-    @else
-        @if($lab_lec_grades)
-            @php
-                $other = DB::table('lab_lec_grades')
-                ->where('student_id','=',$value->id)
-                ->where('id','=',$lab_lec_grades->id)
-                ->first();
-                if($other){
-                    $grade = $other->other;
-                }
-            @endphp
-            <input type="text" class="form-control" value="{{$grade }}" wire:change="updateLabLecGrades({{ $lab_lec_grades->id }},{{ $value->id }},$event.target.value)">
-        @endif
-    @endif
+    @php
+        $term_grade_other = DB::table('term_grades')
+            ->where('schedule_id','=',$detail['schedule_id'])
+            ->where('term_id','=',$detail['term_id'])
+            ->where('student_id','=',$value->id)
+            ->value('other');
+        
+        // If there's a valid calculated grade and no INC status
+        $display_grade = '';
+        if(floatval($grade) && !$inc) {
+            $display_grade = number_format($total_grade * 100, 2, '.', '');
+        } elseif($term_grade_other) {
+            // Show the "other" status like INC, DROP
+            $display_grade = $term_grade_other;
+        } else {
+            // Default to showing the Total column value
+            $display_grade = ($total_grade ? number_format($total_grade*100, 2, '.', '') : 'No data');
+        }
+    @endphp
+    {{ $display_grade }}
 </td>
 
 @php
@@ -633,92 +637,104 @@
         0
     @endif
 </th>
-<th scope="col" class="">
+<th scope="col">
     @php
-        $final_grade = floatval($total_lab_lec_grade) ? ($total_lab_lec_grade/$total_lab_lec_grade_average) : 0;
+        $final_grade = floatval($total_lab_lec_grade)
+            ? ($total_lab_lec_grade / $total_lab_lec_grade_average)
+            : 0;
+
+        // Check for INC status
+        $has_inc = DB::table('term_grades')
+            ->where('schedule_id', $detail['schedule_id'])
+            ->where('student_id', $value->id)
+            ->where('term_id', $detail['term_id'])
+            ->where('other', 'INC')
+            ->exists();
+
+        $has_lab_inc = DB::table('lab_lec_grades')
+            ->where('schedule_id', $detail['schedule_id'])
+            ->where('student_id', $value->id)
+            ->where('other', 'INC')
+            ->exists();
+
+        // Check for DROP status
+        $has_drop = DB::table('term_grades')
+            ->where('schedule_id', $detail['schedule_id'])
+            ->where('student_id', $value->id)
+            ->where('term_id', $detail['term_id'])
+            ->where('other', 'DROP')
+            ->exists();
+
+        $has_lab_drop = DB::table('lab_lec_grades')
+            ->where('schedule_id', $detail['schedule_id'])
+            ->where('student_id', $value->id)
+            ->where('other', 'DROP')
+            ->exists();
+
+        // Determine current remark based on priority
+        $current_remark = null;
         
-        // Get current term-specific remark
-        $term_grade_record = DB::table('term_grades')
-            ->where('schedule_id','=',$detail['schedule_id'])
-            ->where('student_id','=',$value->id)
-            ->where('term_id','=',$detail['term_id']) // This makes it term-specific
-            ->first();
-        
-        $current_remark = $term_grade_record ? $term_grade_record->remarks : null;
-        
-        // Auto-calculate default remarks if not set
-        if (empty($current_remark)) {
-            // Check for INC status in current term
-            $has_inc = DB::table('term_grades')
-                ->where('schedule_id','=',$detail['schedule_id'])
-                ->where('student_id','=',$value->id)
-                ->where('term_id','=',$detail['term_id']) // Current term only
-                ->where('other','=','INC')
-                ->exists();
-                
-            $has_lab_inc = DB::table('lab_lec_grades')
-                ->where('schedule_id','=',$detail['schedule_id'])
-                ->where('student_id','=',$value->id)
-                ->where('other','=','INC')
-                ->exists();
-            
-            // Check for DROP status in current term
-            $has_drop = DB::table('term_grades')
-                ->where('schedule_id','=',$detail['schedule_id'])
-                ->where('student_id','=',$value->id)
-                ->where('term_id','=',$detail['term_id']) // Current term only
-                ->where('other','=','DROP')
-                ->exists();
-                
-            $has_lab_drop = DB::table('lab_lec_grades')
-                ->where('schedule_id','=',$detail['schedule_id'])
-                ->where('student_id','=',$value->id)
-                ->where('other','=','DROP')
-                ->exists();
-            
-            if ($has_inc || $has_lab_inc) {
-                $current_remark = 'INC';
-            } elseif ($has_drop || $has_lab_drop) {
-                $current_remark = 'DROP';
-            } elseif ($final_grade > 0) {
-                // Find passing grade from point_grade_equivalent
-                $passing_grade = 3.0;
-                foreach($point_grade_equivalent as $p_value) {
-                    if ($final_grade >= $p_value->minimum && $final_grade < $p_value->maximum + 1) {
-                        if (floatval($p_value->grade) <= $passing_grade) {
-                            $current_remark = 'PASSED';
-                        } else {
-                            $current_remark = 'FAILED';
-                        }
-                        break;
-                    }
+        if ($has_inc || $has_lab_inc) {
+            $current_remark = 'INC';
+        } elseif ($has_drop || $has_lab_drop) {
+            $current_remark = 'DROP';
+        } elseif ($final_grade > 0) {
+            // Find the weighted grade
+            $weighted_grade = null;
+            foreach($point_grade_equivalent as $p_value) {
+                if($final_grade >= $p_value->minimum && $final_grade < $p_value->maximum + 1) {
+                    $weighted_grade = floatval($p_value->grade);
+                    break;
                 }
-                
-                if (empty($current_remark)) {
-                    $current_remark = $final_grade >= 75 ? 'PASSED' : 'FAILED';
+            }
+            
+            // Determine PASSED or FAILED based on weighted grade
+            // Grades 1.0 to 3.0 are PASSED, above 3.0 is FAILED
+            if ($weighted_grade !== null) {
+                if ($weighted_grade <= 3.0) {
+                    $current_remark = 'PASSED';
+                } else {
+                    $current_remark = 'FAILED';
                 }
             }
         }
-        
-        // Badge color classes
-        $badge_class = match($current_remark) {
+
+        // Auto-update the remark in database
+        if ($current_remark !== null) {
+            $existing_remark = DB::table('term_grades')
+                ->where('schedule_id', $detail['schedule_id'])
+                ->where('student_id', $value->id)
+                ->where('term_id', $detail['term_id'])
+                ->value('remarks');
+            
+            // Only update if remark has changed
+            if ($existing_remark !== $current_remark) {
+                DB::table('term_grades')
+                    ->updateOrInsert(
+                        [
+                            'schedule_id' => $detail['schedule_id'],
+                            'student_id' => $value->id,
+                            'term_id' => $detail['term_id']
+                        ],
+                        [
+                            'remarks' => $current_remark
+                        ]
+                    );
+            }
+        }
+
+        $badge_class = match ($current_remark) {
             'PASSED' => 'bg-success',
             'FAILED' => 'bg-danger',
-            'INC' => 'bg-warning text-dark',
-            'DROP' => 'bg-secondary',
-            default => 'bg-light text-dark'
+            'INC'    => 'bg-warning text-dark',
+            'DROP'   => 'bg-secondary',
+            default  => 'bg-light text-dark'
         };
     @endphp
-    
-    <select class="form-select form-select-sm badge {{ $badge_class }}" 
-            style="min-width: 100px; border: none;"
-            wire:change="updateRemarks({{ $value->id }}, $event.target.value)">
-        <option value="" {{ empty($current_remark) ? 'selected' : '' }}>N/A</option>
-        <option value="PASSED" {{ $current_remark == 'PASSED' ? 'selected' : '' }}>PASSED</option>
-        <option value="FAILED" {{ $current_remark == 'FAILED' ? 'selected' : '' }}>FAILED</option>
-        <option value="INC" {{ $current_remark == 'INC' ? 'selected' : '' }}>INC</option>
-        <option value="DROP" {{ $current_remark == 'DROP' ? 'selected' : '' }}>DROP</option>
-    </select>
+
+    <span class="badge {{ $badge_class }}" style="min-width:100px; display:inline-block;">
+        {{ $current_remark ?? 'N/A' }}
+    </span>
 </th>
                             </tr>
                         @empty

@@ -1307,6 +1307,7 @@ class FacultyEvaluationLists extends Component
         }
 
         // Priority 3: Calculate based on grade
+        // Calculate final grade
         $lab_lec_grades = DB::table('lab_lec_grades')
             ->where('schedule_id', '=', $this->detail['schedule_id'])
             ->where('student_id', '=', $student_id)
@@ -1319,11 +1320,8 @@ class FacultyEvaluationLists extends Component
         if ($this->schedule && $this->schedule->is_lec) {
             $total_lab_lec_grade_average += 1;
             if ($lab_lec_grades != null && floatval($lab_lec_grades->grade)) {
-                // Get current term weight
                 $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
                 $term_weight_percent = $current_term ? $current_term->weight : 100;
-
-                // Calculate scaled lecture grade
                 $actual_grade_percent = ($lab_lec_grades->grade / $lab_lec_grades->sub_weight) * 100;
                 $scaled_lecture_grade = ($actual_grade_percent / $term_weight_percent) * 10000;
                 $total_lab_lec_grade += $scaled_lecture_grade;
@@ -1341,8 +1339,8 @@ class FacultyEvaluationLists extends Component
                 $total_lab_lec_grade_average += 1;
 
                 if ($lab_lec_grade != null && floatval($lab_lec_grade->grade)) {
-                    $total_lab_lec_grade += floatval($lab_lec_grade->grade) ?
-                        floatval($lab_lec_grade->grade / $lab_lec_grade->sub_weight * 100 * 100) : 0;
+                    $lab_grade_value = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100 * 100;
+                    $total_lab_lec_grade += $lab_grade_value;
                 }
             }
         }
@@ -1351,23 +1349,21 @@ class FacultyEvaluationLists extends Component
         $final_grade = ($total_lab_lec_grade_average > 0 && floatval($total_lab_lec_grade)) ?
             ($total_lab_lec_grade / $total_lab_lec_grade_average) : 0;
 
-        // Determine PASSED or FAILED based on grade
+        // Determine PASSED or FAILED based on weighted grade
         if ($final_grade > 0) {
-            $passing_grade = 3.0;
-
-            // Check against point grade equivalent
+            // Find the weighted grade from point_grade_equivalent
             foreach ($this->point_grade_equivalent as $p_value) {
                 if ($final_grade >= $p_value->minimum && $final_grade < $p_value->maximum + 1) {
-                    if (floatval($p_value->grade) <= $passing_grade) {
+                    $weighted_grade = floatval($p_value->grade);
+                    
+                    // Grades 1.0 to 3.0 are PASSED, above 3.0 is FAILED
+                    if ($weighted_grade <= 3.0) {
                         return 'PASSED';
                     } else {
                         return 'FAILED';
                     }
                 }
             }
-
-            // Fallback: 75 is passing
-            return $final_grade >= 75 ? 'PASSED' : 'FAILED';
         }
 
         // No grade calculated yet
