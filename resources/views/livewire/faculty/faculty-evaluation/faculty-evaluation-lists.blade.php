@@ -573,30 +573,64 @@
 @if($schedule->laboratory_unit > 0 || $schedule->is_lec == 0)
     <th scope="col" class="">
         @php 
-            $lab_lec_grade = DB::table('lab_lec_grades')
-                ->where('schedule_id','=', $laboratory_schedules[0]->id ?? null)
-                ->where('student_id','=',$value->id)
-                ->first();                                            
             $total_lab_lec_grade_average += 1;
             
-            // Get current term weight percentage
+            // Get current term info
             $current_term = collect($terms)->firstWhere('id', $detail['term_id']);
-            $term_weight_percent = $current_term ? $current_term->weight : 100;
+            $term_type = $current_term ? $current_term->term_name : 'Midterm'; // Midterm or Finalterm
+            
+            // For LECTURE schedules, get the laboratory value from lab_values table
+            if($schedule->is_lec == 1) {
+                $lab_value = DB::table('lab_values')
+                    ->where('student_id', '=', $value->id)
+                    // ->where('schedule_id', '=', $detail['schedule_id'])
+                    // ->where('term_id', '=', $detail['term_id'])
+                    ->where('term_type', '=', $term_type)
+                    ->first();
+                
+                $scaled_laboratory_grade = $lab_value ? floatval($lab_value->value_lab) : 0;
+                
+                if($scaled_laboratory_grade > 0) {
+                    $total_lab_lec_grade += $scaled_laboratory_grade;
+                }
+            } else {
+                // For LABORATORY schedules, calculate from lab_lec_grades (existing logic)
+                $lab_lec_grade = DB::table('lab_lec_grades')
+                    ->where('schedule_id','=', $detail['schedule_id'])
+                    ->where('student_id','=',$value->id)
+                    ->first();
+                
+                // Get current term weight percentage
+                $term_weight_percent = $current_term ? $current_term->weight : 100;
+                
+                if($lab_lec_grade != null && floatval($lab_lec_grade->grade)) {
+                    // Calculate the actual grade percentage (0-100 scale)
+                    $actual_lab_grade_percent = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100;
+                    
+                    // Scale it to match the term weight percentage
+                    $scaled_laboratory_grade = ($actual_lab_grade_percent / $term_weight_percent) * 10000;
+                    
+                    $total_lab_lec_grade += $scaled_laboratory_grade;
+                } else {
+                    $scaled_laboratory_grade = 0;
+                }
+            }
         @endphp
-        @if($lab_lec_grade != null && floatval($lab_lec_grade->grade))
-            @php
-                // Calculate the actual grade percentage (0-100 scale)
-                $actual_lab_grade_percent = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100;
-                
-                // Scale it to match the term weight percentage
-                // Formula: (actual_grade / term_weight) * 10000
-                $scaled_laboratory_grade = ($actual_lab_grade_percent / $term_weight_percent) * 10000;
-                
-                $total_lab_lec_grade += $scaled_laboratory_grade;
-            @endphp
-            {{ number_format($scaled_laboratory_grade, 2, '.', '') }}
+        
+        @if($schedule->is_lec == 1)
+            {{-- For lecture schedules, show value from lab_values table --}}
+            @if($lab_value && floatval($lab_value->value_lab))
+                {{ number_format($scaled_laboratory_grade, 2, '.', '') }}
+            @else
+                0.00
+            @endif
         @else
-            {{$lab_lec_grade ? $lab_lec_grade->other : ""}}    
+            {{-- For laboratory schedules, show calculated value --}}
+            @if($scaled_laboratory_grade > 0)
+                {{ number_format($scaled_laboratory_grade, 2, '.', '') }}
+            @else
+                {{$lab_lec_grade ? $lab_lec_grade->other : "0.00"}}    
+            @endif
         @endif
     </th>
 @endif
