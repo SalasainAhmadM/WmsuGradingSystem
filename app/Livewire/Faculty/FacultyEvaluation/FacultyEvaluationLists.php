@@ -2218,8 +2218,7 @@ class FacultyEvaluationLists extends Component
             ->where('es.schedule_id', '=', $this->detail['schedule_id'])
             ->get();
 
-        // IMPORTANT: Loop through ALL terms, not just the current one
-        // This ensures both Midterm and Finalterm values are stored correctly
+        // Get all terms for this schedule
         $all_terms = DB::table('terms')
             ->where('schedule_id', '=', $this->detail['schedule_id'])
             ->orderBy('term_order', 'asc')
@@ -2232,31 +2231,27 @@ class FacultyEvaluationLists extends Component
             foreach ($students as $student) {
                 // Get laboratory grade for this specific term
                 if (count($this->laboratory_schedules) > 0) {
-                    // Check if there's a lab_lec_grades record for this term
-                    // Note: lab_lec_grades might not have term_id, so we need to check the term_grades table
-                    $term_grade = DB::table('term_grades')
-                        ->where('schedule_id', '=', $this->detail['schedule_id'])
-                        ->where('student_id', '=', $student->id)
-                        ->where('term_id', '=', $term->id)
-                        ->first();
-
-                    // Get the laboratory schedule grade
-                    $lab_lec_grade = DB::table('lab_lec_grades')
+                    // Get the term grade for THIS SPECIFIC TERM from the laboratory schedule
+                    $lab_term_grade = DB::table('term_grades')
                         ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
                         ->where('student_id', '=', $student->id)
+                        ->where('term_id', '=', $term->id)
                         ->first();
 
                     // Calculate scaled laboratory value
                     $value_lab = null;
 
                     // Only calculate if we have a grade for this specific term
-                    if ($term_grade && $lab_lec_grade != null && floatval($lab_lec_grade->grade)) {
-                        // Calculate the actual grade percentage (0-100 scale)
-                        $actual_lab_grade_percent = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100;
+                    if ($lab_term_grade && floatval($lab_term_grade->grade)) {
+                        // The grade in term_grades is already the calculated term grade (0-100 scale)
+                        // We need to scale it based on the term weight
+
+                        // Calculate the actual grade percentage
+                        $actual_lab_grade_percent = floatval($lab_term_grade->grade) * 100;
 
                         // Scale it to match the term weight percentage
                         // Formula: (actual_grade / term_weight) * 10000
-                        $value_lab = ($actual_lab_grade_percent / $term_weight_percent) * 10000;
+                        $value_lab = ($actual_lab_grade_percent / $term_weight_percent) * 100;
                     }
 
                     // Insert or update the lab value for THIS SPECIFIC TERM
@@ -2269,8 +2264,8 @@ class FacultyEvaluationLists extends Component
                         updated_at = CURRENT_TIMESTAMP
                 ", [
                         $student->id,
-                        $this->detail['schedule_id'],
-                        $term->id, // Use the term from the loop, not the current detail term
+                        $this->detail['schedule_id'], // Store the LECTURE schedule_id
+                        $term->id,
                         $term_type,
                         $value_lab
                     ]);
