@@ -1838,21 +1838,23 @@ class FacultyEvaluationLists extends Component
 
                 // Laboratory Grade
                 if ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) {
-                    if (count($this->laboratory_schedules) > 0) {
-                        $lab_lec_grade = DB::table('lab_lec_grades')
-                            ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
-                            ->where('student_id', '=', $student->id)
-                            ->first();
+                    $total_lab_lec_grade_average += 1;
 
-                        $total_lab_lec_grade_average += 1;
+                    // Get current term's laboratory value
+                    $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
+                    $lab_value = DB::table('lab_values')
+                        ->where('student_id', '=', $student->id)
+                        ->where('schedule_id', '=', $this->detail['schedule_id'])
+                        ->where('term_id', '=', $this->detail['term_id'])
+                        ->where('term_type', '=', $current_term->term_name)
+                        ->first();
 
-                        if ($lab_lec_grade != null && floatval($lab_lec_grade->grade)) {
-                            $lab_grade_value = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100 * 100;
-                            $total_lab_lec_grade += $lab_grade_value;
-                            $row[] = number_format($lab_grade_value, 2, '.', '');
-                        } else {
-                            $row[] = $lab_lec_grade ? $lab_lec_grade->other : '';
-                        }
+                    if ($lab_value && floatval($lab_value->value_lab)) {
+                        $lab_grade_value = floatval($lab_value->value_lab) / 100; // Scale down from 10000 to 100
+                        $total_lab_lec_grade += floatval($lab_value->value_lab);
+                        $row[] = number_format($lab_grade_value, 2, '.', '');
+                    } else {
+                        $row[] = '';
                     }
                 }
 
@@ -2106,21 +2108,23 @@ class FacultyEvaluationLists extends Component
 
                 // Laboratory Grade
                 if ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) {
-                    if (count($this->laboratory_schedules) > 0) {
-                        $lab_lec_grade = DB::table('lab_lec_grades')
-                            ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
-                            ->where('student_id', '=', $student->id)
-                            ->first();
+                    $total_lab_lec_grade_average += 1;
 
-                        $total_lab_lec_grade_average += 1;
+                    // Get current term's laboratory value
+                    $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
+                    $lab_value = DB::table('lab_values')
+                        ->where('student_id', '=', $student->id)
+                        ->where('schedule_id', '=', $this->detail['schedule_id'])
+                        ->where('term_id', '=', $this->detail['term_id'])
+                        ->where('term_type', '=', $current_term->term_name)
+                        ->first();
 
-                        if ($lab_lec_grade != null && floatval($lab_lec_grade->grade)) {
-                            $lab_grade_value = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100 * 100;
-                            $total_lab_lec_grade += $lab_grade_value;
-                            echo '<td class="text-center">' . number_format($lab_grade_value, 2, '.', '') . '</td>';
-                        } else {
-                            echo '<td class="text-center">' . htmlspecialchars($lab_lec_grade ? $lab_lec_grade->other : '') . '</td>';
-                        }
+                    if ($lab_value && floatval($lab_value->value_lab)) {
+                        $lab_grade_value = floatval($lab_value->value_lab) / 100; // Scale down from 10000 to 100
+                        $total_lab_lec_grade += floatval($lab_value->value_lab);
+                        echo '<td class="text-center">' . number_format($lab_grade_value, 2, '.', '') . '</td>';
+                    } else {
+                        echo '<td class="text-center"></td>';
                     }
                 }
 
