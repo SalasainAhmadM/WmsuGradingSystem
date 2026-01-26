@@ -1408,6 +1408,8 @@ class FacultyEvaluationLists extends Component
 
         // Track if we have any valid grades
         $has_any_grades = false;
+        $lab_midterm_value = 0;
+        $lab_finalterm_value = 0;
 
         // For each term, calculate the lecture and laboratory grade values
         foreach ($all_terms as $term) {
@@ -1416,12 +1418,6 @@ class FacultyEvaluationLists extends Component
                 ->where('schedule_id', '=', $this->detail['schedule_id'])
                 ->where('student_id', '=', $student_id)
                 ->where('term_id', '=', $term->id)
-                ->first();
-
-            // Get the lab_lec_grades record for lecture
-            $lab_lec_grade = DB::table('lab_lec_grades')
-                ->where('schedule_id', '=', $this->detail['schedule_id'])
-                ->where('student_id', '=', $student_id)
                 ->first();
 
             // Track this term for counting
@@ -1443,28 +1439,32 @@ class FacultyEvaluationLists extends Component
                 }
             }
 
+            // Calculate LABORATORY value for THIS TERM from lab_values table
             if ($this->schedule && ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0)) {
-                if (count($this->laboratory_schedules) > 0) {
-                    $lab_lec_grade_lab = DB::table('lab_lec_grades')
-                        ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
-                        ->where('student_id', '=', $student_id)
-                        ->first();
+                // Get term type
+                $term_type = $term->term_name; // 'Midterm' or 'Finalterm'
 
-                    if ($lab_lec_grade_lab != null && floatval($lab_lec_grade_lab->grade)) {
-                        // Get term weight for scaling
-                        $term_weight_percent = $term->weight;
+                // Get laboratory value from lab_values table
+                $lab_value = DB::table('lab_values')
+                    ->where('student_id', '=', $student_id)
+                    ->where('schedule_id', '=', $this->detail['schedule_id'])
+                    ->where('term_id', '=', $term->id)
+                    ->where('term_type', '=', $term_type)
+                    ->first();
 
-                        // Calculate actual laboratory grade percentage (0-100 scale)
-                        $actual_lab_grade_percent = ($lab_lec_grade_lab->grade / $lab_lec_grade_lab->sub_weight) * 100;
+                if ($lab_value && floatval($lab_value->value_lab)) {
+                    $lab_grade_value = floatval($lab_value->value_lab);
 
-                        // Scale to match term weight: (actual_grade / term_weight) * 10000
-                        $term_laboratory_value = ($actual_lab_grade_percent / $term_weight_percent) * 10000;
-
-                        // Add to cumulative total
-                        $total_laboratory_grade += $term_laboratory_value;
-                        $term_has_data = true;
-                        $has_any_grades = true;
+                    // Store values separately for Midterm and Finalterm
+                    if (strtolower($term_type) == 'midterm') {
+                        $lab_midterm_value = $lab_grade_value;
+                    } elseif (strtolower($term_type) == 'finalterm') {
+                        $lab_finalterm_value = $lab_grade_value;
                     }
+
+                    $total_laboratory_grade += $lab_grade_value;
+                    $term_has_data = true;
+                    $has_any_grades = true;
                 }
             }
 
@@ -1487,7 +1487,14 @@ class FacultyEvaluationLists extends Component
             }
 
             if ($this->schedule && ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) && $total_laboratory_grade > 0) {
-                $final_laboratory_value = $total_laboratory_grade / $term_count;
+                // Average the laboratory values (Midterm + Finalterm) / 2
+                $lab_count = 0;
+                if ($lab_midterm_value > 0)
+                    $lab_count++;
+                if ($lab_finalterm_value > 0)
+                    $lab_count++;
+
+                $final_laboratory_value = $lab_count > 0 ? (($lab_midterm_value + $lab_finalterm_value) / $lab_count) / 100 : 0;
             }
         }
 
@@ -1512,14 +1519,11 @@ class FacultyEvaluationLists extends Component
                 ->where('other', '=', 'INC')
                 ->exists();
 
-            $has_lab_inc = false;
-            if (count($this->laboratory_schedules) > 0) {
-                $has_lab_inc = DB::table('lab_lec_grades')
-                    ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
-                    ->where('student_id', '=', $student_id)
-                    ->where('other', '=', 'INC')
-                    ->exists();
-            }
+            $has_lab_inc = DB::table('lab_values')
+                ->where('student_id', '=', $student_id)
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->whereRaw("LOWER(TRIM(term_type)) = 'inc'")
+                ->exists();
 
             // Check if any term has DROP status (across all terms, not just valid ones)
             $has_drop = DB::table('term_grades')
@@ -1528,14 +1532,11 @@ class FacultyEvaluationLists extends Component
                 ->where('other', '=', 'DROP')
                 ->exists();
 
-            $has_lab_drop = false;
-            if (count($this->laboratory_schedules) > 0) {
-                $has_lab_drop = DB::table('lab_lec_grades')
-                    ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
-                    ->where('student_id', '=', $student_id)
-                    ->where('other', '=', 'DROP')
-                    ->exists();
-            }
+            $has_lab_drop = DB::table('lab_values')
+                ->where('student_id', '=', $student_id)
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->whereRaw("LOWER(TRIM(term_type)) = 'drop'")
+                ->exists();
 
             // Determine remarks based on priority
             if ($has_inc || $has_lab_inc) {
@@ -1592,14 +1593,11 @@ class FacultyEvaluationLists extends Component
                 ->where('other', '=', 'INC')
                 ->exists();
 
-            $has_lab_inc = false;
-            if (count($this->laboratory_schedules) > 0) {
-                $has_lab_inc = DB::table('lab_lec_grades')
-                    ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
-                    ->where('student_id', '=', $student_id)
-                    ->where('other', '=', 'INC')
-                    ->exists();
-            }
+            $has_lab_inc = DB::table('lab_values')
+                ->where('student_id', '=', $student_id)
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->whereRaw("LOWER(TRIM(term_type)) = 'inc'")
+                ->exists();
 
             $has_drop = DB::table('term_grades')
                 ->where('schedule_id', '=', $this->detail['schedule_id'])
@@ -1607,14 +1605,11 @@ class FacultyEvaluationLists extends Component
                 ->where('other', '=', 'DROP')
                 ->exists();
 
-            $has_lab_drop = false;
-            if (count($this->laboratory_schedules) > 0) {
-                $has_lab_drop = DB::table('lab_lec_grades')
-                    ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
-                    ->where('student_id', '=', $student_id)
-                    ->where('other', '=', 'DROP')
-                    ->exists();
-            }
+            $has_lab_drop = DB::table('lab_values')
+                ->where('student_id', '=', $student_id)
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->whereRaw("LOWER(TRIM(term_type)) = 'drop'")
+                ->exists();
 
             if ($has_inc || $has_lab_inc) {
                 $remarks = 'INC';
@@ -2273,4 +2268,5 @@ class FacultyEvaluationLists extends Component
             }
         }
     }
+
 }
