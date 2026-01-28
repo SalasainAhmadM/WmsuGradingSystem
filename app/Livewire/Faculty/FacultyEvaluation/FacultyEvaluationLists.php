@@ -1679,6 +1679,15 @@ class FacultyEvaluationLists extends Component
         $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
         $term_name = $current_term ? $current_term->term_name : 'Term';
 
+        // Get Lab Lec Weight values
+        $lab_lec_weight = DB::table('lab_lec')
+            ->where('schedule_id', '=', $this->detail['schedule_id'])
+            ->where('term_id', '=', $this->detail['term_id'])
+            ->first();
+
+        $lecture_weight_percent = $lab_lec_weight ? floatval($lab_lec_weight->sub_weight) : 80;
+        $laboratory_weight_percent = 100 - $lecture_weight_percent;
+
         // Prepare CSV content
         $filename = 'evaluation_' . $term_name . '_' . $this->school_year . '_' . $this->semester . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.csv';
 
@@ -1687,7 +1696,7 @@ class FacultyEvaluationLists extends Component
             'Content-Disposition' => 'attachment; filename="' . $filename . '"',
         ];
 
-        $callback = function () use ($students, $term_name) {
+        $callback = function () use ($students, $term_name, $lecture_weight_percent, $laboratory_weight_percent) {
             $file = fopen('php://output', 'w');
 
             // Add BOM for UTF-8
@@ -1712,7 +1721,7 @@ class FacultyEvaluationLists extends Component
             if ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) {
                 $header[] = 'Laboratory';
             }
-            $header[] = 'Total';
+            $header[] = 'Total (Weighted Avg)';
             $header[] = 'Weighted Grade';
             $header[] = 'Remarks';
 
@@ -1794,24 +1803,23 @@ class FacultyEvaluationLists extends Component
                 }
                 $row[] = $term_grade_value;
 
-                // Get lab/lec grades
-                $lab_lec_grades = DB::table('lab_lec_grades')
-                    ->where('schedule_id', '=', $this->detail['schedule_id'])
-                    ->where('student_id', '=', $student->id)
-                    ->first();
-
-                $total_lab_lec_grade = 0;
-                $total_lab_lec_grade_average = 0;
+                // Variables to store component grades
+                $lecture_component = null;
+                $laboratory_component = null;
 
                 // Lecture Grade
                 if ($this->schedule->is_lec) {
-                    $total_lab_lec_grade_average += 1;
+                    $lab_lec_grades = DB::table('lab_lec_grades')
+                        ->where('schedule_id', '=', $this->detail['schedule_id'])
+                        ->where('student_id', '=', $student->id)
+                        ->first();
+
                     if ($lab_lec_grades != null && floatval($lab_lec_grades->grade)) {
                         $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
                         $term_weight_percent = $current_term ? $current_term->weight : 100;
                         $actual_grade_percent = ($lab_lec_grades->grade / $lab_lec_grades->sub_weight) * 100;
                         $scaled_lecture_grade = ($actual_grade_percent / $term_weight_percent) * 10000;
-                        $total_lab_lec_grade += $scaled_lecture_grade;
+                        $lecture_component = $scaled_lecture_grade;
                         $row[] = number_format($scaled_lecture_grade, 2, '.', '');
                     } else {
                         $row[] = $lab_lec_grades ? $lab_lec_grades->other : '';
@@ -1820,37 +1828,63 @@ class FacultyEvaluationLists extends Component
 
                 // Laboratory Grade
                 if ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) {
-                    $total_lab_lec_grade_average += 1;
-
                     // Get current term's laboratory value
                     $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
-                    $lab_value = DB::table('lab_values')
-                        ->where('student_id', '=', $student->id)
-                        ->where('schedule_id', '=', $this->detail['schedule_id'])
-                        ->where('term_id', '=', $this->detail['term_id'])
-                        ->where('term_type', '=', $current_term->term_name)
-                        ->first();
+                    $term_type = $current_term ? $current_term->term_name : 'Midterm';
 
-                    if ($lab_value && floatval($lab_value->value_lab)) {
-                        $lab_grade_value = floatval($lab_value->value_lab) / 100; // Scale down from 10000 to 100
-                        $total_lab_lec_grade += floatval($lab_value->value_lab);
-                        $row[] = number_format($lab_grade_value, 2, '.', '');
+                    if ($this->schedule->is_lec == 1) {
+                        // For lecture schedules, get from lab_values
+                        $lab_value = DB::table('lab_values')
+                            ->where('student_id', '=', $student->id)
+                            ->where('term_type', '=', $term_type)
+                            ->first();
+
+                        if ($lab_value && floatval($lab_value->value_lab)) {
+                            $scaled_laboratory_grade = floatval($lab_value->value_lab);
+                            $laboratory_component = $scaled_laboratory_grade;
+                            $row[] = number_format($scaled_laboratory_grade, 2, '.', '');
+                        } else {
+                            $row[] = '0.00';
+                        }
                     } else {
-                        $row[] = '';
+                        // For laboratory schedules, calculate from lab_lec_grades
+                        $lab_lec_grades = DB::table('lab_lec_grades')
+                            ->where('schedule_id', '=', $this->detail['schedule_id'])
+                            ->where('student_id', '=', $student->id)
+                            ->first();
+
+                        if ($lab_lec_grades != null && floatval($lab_lec_grades->grade)) {
+                            $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
+                            $term_weight_percent = $current_term ? $current_term->weight : 100;
+                            $actual_lab_grade_percent = ($lab_lec_grades->grade / $lab_lec_grades->sub_weight) * 100;
+                            $scaled_laboratory_grade = ($actual_lab_grade_percent / $term_weight_percent) * 100;
+                            $laboratory_component = $scaled_laboratory_grade;
+                            $row[] = number_format($scaled_laboratory_grade, 2, '.', '');
+                        } else {
+                            $row[] = $lab_lec_grades ? $lab_lec_grades->other : '0.00';
+                        }
                     }
                 }
 
-                // Total Grade
-                $final_grade = ($total_lab_lec_grade_average > 0 && floatval($total_lab_lec_grade))
-                    ? ($total_lab_lec_grade / $total_lab_lec_grade_average)
-                    : 0;
-                $row[] = $final_grade > 0 ? number_format($final_grade, 2, '.', '') : '';
+                // Calculate Weighted Average based on Lab Lec Weight
+                $weighted_average = 0;
+                if ($lecture_component !== null && $laboratory_component !== null) {
+                    // Weighted Average = (Lecture × Lecture%) + (Laboratory × Laboratory%)
+                    $weighted_average = ($lecture_component * ($lecture_weight_percent / 100)) +
+                        ($laboratory_component * ($laboratory_weight_percent / 100));
+                } elseif ($lecture_component !== null) {
+                    $weighted_average = $lecture_component;
+                } elseif ($laboratory_component !== null) {
+                    $weighted_average = $laboratory_component;
+                }
 
-                // Weighted Grade
+                $row[] = $weighted_average > 0 ? number_format($weighted_average, 2, '.', '') : '0.00';
+
+                // Weighted Grade (Point Grade)
                 $weighted_grade = '';
-                if ($final_grade > 0) {
+                if ($weighted_average > 0) {
                     foreach ($this->point_grade_equivalent as $p_value) {
-                        if ($final_grade >= $p_value->minimum && $final_grade < $p_value->maximum + 1) {
+                        if ($weighted_average >= $p_value->minimum && $weighted_average < $p_value->maximum + 1) {
                             $weighted_grade = $p_value->grade;
                             break;
                         }
@@ -1922,6 +1956,15 @@ class FacultyEvaluationLists extends Component
         $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
         $term_name = $current_term ? $current_term->term_name : 'Term';
 
+        // Get Lab Lec Weight values
+        $lab_lec_weight = DB::table('lab_lec')
+            ->where('schedule_id', '=', $this->detail['schedule_id'])
+            ->where('term_id', '=', $this->detail['term_id'])
+            ->first();
+
+        $lecture_weight_percent = $lab_lec_weight ? floatval($lab_lec_weight->sub_weight) : 80;
+        $laboratory_weight_percent = 100 - $lecture_weight_percent;
+
         // Create Excel content
         $filename = 'evaluation_' . $term_name . '_' . $this->school_year . '_' . $this->semester . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.xls';
 
@@ -1933,7 +1976,7 @@ class FacultyEvaluationLists extends Component
             'Expires' => '0',
         ];
 
-        $callback = function () use ($students, $term_name) {
+        $callback = function () use ($students, $term_name, $lecture_weight_percent, $laboratory_weight_percent) {
             echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
             echo '<head>';
             echo '<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">';
@@ -1957,6 +2000,7 @@ class FacultyEvaluationLists extends Component
                 echo '<p><strong>Subject:</strong> ' . htmlspecialchars($this->schedule->subject) . '</p>';
                 echo '<p><strong>Faculty:</strong> ' . htmlspecialchars($this->schedule->faculty_fullname) . '</p>';
             }
+            echo '<p><strong>Lab/Lecture Weight:</strong> Lecture ' . number_format($lecture_weight_percent, 2) . '% / Laboratory ' . number_format($laboratory_weight_percent, 2) . '%</p>';
             echo '<br>';
 
             echo '<table>';
@@ -1986,7 +2030,7 @@ class FacultyEvaluationLists extends Component
             if ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) {
                 echo '<th>Laboratory</th>';
             }
-            echo '<th>Total</th>';
+            echo '<th>Total (Weighted Avg)</th>';
             echo '<th>Weighted Grade</th>';
             echo '<th>Remarks</th>';
             echo '</tr></thead><tbody>';
@@ -2064,24 +2108,23 @@ class FacultyEvaluationLists extends Component
                 }
                 echo '<td class="text-center">' . $term_grade_value . '</td>';
 
-                // Get lab/lec grades
-                $lab_lec_grades = DB::table('lab_lec_grades')
-                    ->where('schedule_id', '=', $this->detail['schedule_id'])
-                    ->where('student_id', '=', $student->id)
-                    ->first();
-
-                $total_lab_lec_grade = 0;
-                $total_lab_lec_grade_average = 0;
+                // Variables to store component grades
+                $lecture_component = null;
+                $laboratory_component = null;
 
                 // Lecture Grade
                 if ($this->schedule->is_lec) {
-                    $total_lab_lec_grade_average += 1;
+                    $lab_lec_grades = DB::table('lab_lec_grades')
+                        ->where('schedule_id', '=', $this->detail['schedule_id'])
+                        ->where('student_id', '=', $student->id)
+                        ->first();
+
                     if ($lab_lec_grades != null && floatval($lab_lec_grades->grade)) {
                         $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
                         $term_weight_percent = $current_term ? $current_term->weight : 100;
                         $actual_grade_percent = ($lab_lec_grades->grade / $lab_lec_grades->sub_weight) * 100;
                         $scaled_lecture_grade = ($actual_grade_percent / $term_weight_percent) * 10000;
-                        $total_lab_lec_grade += $scaled_lecture_grade;
+                        $lecture_component = $scaled_lecture_grade;
                         echo '<td class="text-center">' . number_format($scaled_lecture_grade, 2, '.', '') . '</td>';
                     } else {
                         echo '<td class="text-center">' . htmlspecialchars($lab_lec_grades ? $lab_lec_grades->other : '') . '</td>';
@@ -2090,37 +2133,65 @@ class FacultyEvaluationLists extends Component
 
                 // Laboratory Grade
                 if ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) {
-                    $total_lab_lec_grade_average += 1;
-
                     // Get current term's laboratory value
                     $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
-                    $lab_value = DB::table('lab_values')
-                        ->where('student_id', '=', $student->id)
-                        ->where('schedule_id', '=', $this->detail['schedule_id'])
-                        ->where('term_id', '=', $this->detail['term_id'])
-                        ->where('term_type', '=', $current_term->term_name)
-                        ->first();
+                    $term_type = $current_term ? $current_term->term_name : 'Midterm';
 
-                    if ($lab_value && floatval($lab_value->value_lab)) {
-                        $lab_grade_value = floatval($lab_value->value_lab) / 100; // Scale down from 10000 to 100
-                        $total_lab_lec_grade += floatval($lab_value->value_lab);
-                        echo '<td class="text-center">' . number_format($lab_grade_value, 2, '.', '') . '</td>';
+                    if ($this->schedule->is_lec == 1) {
+                        // For lecture schedules, get from lab_values
+                        $lab_value = DB::table('lab_values')
+                            ->where('student_id', '=', $student->id)
+                            ->where('term_type', '=', $term_type)
+                            ->first();
+
+                        if ($lab_value && floatval($lab_value->value_lab)) {
+                            $scaled_laboratory_grade = floatval($lab_value->value_lab);
+                            $laboratory_component = $scaled_laboratory_grade;
+                            echo '<td class="text-center">' . number_format($scaled_laboratory_grade, 2, '.', '') . '</td>';
+                        } else {
+                            echo '<td class="text-center">0.00</td>';
+                        }
                     } else {
-                        echo '<td class="text-center"></td>';
+                        // For laboratory schedules, calculate from lab_lec_grades
+                        $lab_lec_grades = DB::table('lab_lec_grades')
+                            ->where('schedule_id', '=', $this->detail['schedule_id'])
+                            ->where('student_id', '=', $student->id)
+                            ->first();
+
+                        if ($lab_lec_grades != null && floatval($lab_lec_grades->grade)) {
+                            $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
+                            $term_weight_percent = $current_term ? $current_term->weight : 100;
+                            $actual_lab_grade_percent = ($lab_lec_grades->grade / $lab_lec_grades->sub_weight) * 100;
+                            $scaled_laboratory_grade = ($actual_lab_grade_percent / $term_weight_percent) * 100;
+                            $laboratory_component = $scaled_laboratory_grade;
+                            echo '<td class="text-center">' . number_format($scaled_laboratory_grade, 2, '.', '') . '</td>';
+                        } else {
+                            echo '<td class="text-center">' . htmlspecialchars($lab_lec_grades ? $lab_lec_grades->other : '0.00') . '</td>';
+                        }
                     }
                 }
 
-                // Total Grade
-                $final_grade = ($total_lab_lec_grade_average > 0 && floatval($total_lab_lec_grade))
-                    ? ($total_lab_lec_grade / $total_lab_lec_grade_average)
-                    : 0;
-                echo '<td class="text-center">' . ($final_grade > 0 ? number_format($final_grade, 2, '.', '') : '') . '</td>';
+                // Calculate Weighted Average based on Lab Lec Weight
+                $weighted_average = 0;
+                if ($lecture_component !== null && $laboratory_component !== null) {
+                    // Weighted Average = (Lecture × Lecture%) + (Laboratory × Laboratory%)
+                    $weighted_average = ($lecture_component * ($lecture_weight_percent / 100)) +
+                        ($laboratory_component * ($laboratory_weight_percent / 100));
+                } elseif ($lecture_component !== null) {
+                    $weighted_average = $lecture_component;
+                } elseif ($laboratory_component !== null) {
+                    $weighted_average = $laboratory_component;
+                }
 
-                // Weighted Grade
+                echo '<td class="text-center" style="background-color: #FFF3CD; font-weight: bold;">' .
+                    ($weighted_average > 0 ? number_format($weighted_average, 2, '.', '') : '0.00') .
+                    '</td>';
+
+                // Weighted Grade (Point Grade)
                 $weighted_grade = '';
-                if ($final_grade > 0) {
+                if ($weighted_average > 0) {
                     foreach ($this->point_grade_equivalent as $p_value) {
-                        if ($final_grade >= $p_value->minimum && $final_grade < $p_value->maximum + 1) {
+                        if ($weighted_average >= $p_value->minimum && $weighted_average < $p_value->maximum + 1) {
                             $weighted_grade = $p_value->grade;
                             break;
                         }

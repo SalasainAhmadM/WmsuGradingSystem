@@ -562,12 +562,20 @@
     $total_grade = 0;
     $total_lab_lec_grade = 0;
     $total_lab_lec_grade_average = 0;
+    
+    // Get the Lab Lec Weight values from the database
+    $lab_lec_weight = DB::table('lab_lec')
+        ->where('schedule_id','=', $detail['schedule_id'])
+        ->where('term_id','=',$detail['term_id'])
+        ->first();
+    
+    $lecture_weight_percent = $lab_lec_weight ? floatval($lab_lec_weight->sub_weight) : 80;
+    $laboratory_weight_percent = 100 - $lecture_weight_percent;
 @endphp 
 
 @if($schedule->is_lec)
     <th scope="col" class="">
         @php 
-            $total_lab_lec_grade_average += 1;
             $lab_lec_grade = DB::table('lab_lec_grades')
                 ->where('schedule_id','=', $detail['schedule_id'])
                 ->where('student_id','=',$value->id)
@@ -587,7 +595,8 @@
                 // Formula: (actual_grade / term_weight) * 100
                 $scaled_lecture_grade = ($actual_grade_percent / $term_weight_percent) * 10000;
                 
-                $total_lab_lec_grade += $scaled_lecture_grade;
+                // Store for weighted average calculation
+                $lecture_component = $scaled_lecture_grade;
             }
         @endphp
         @if($lab_lec_grade != null && floatval($lab_lec_grade->grade))
@@ -601,8 +610,6 @@
 @if($schedule->laboratory_unit > 0 || $schedule->is_lec == 0)
     <th scope="col" class="">
         @php 
-            $total_lab_lec_grade_average += 1;
-            
             // Get current term info
             $current_term = collect($terms)->firstWhere('id', $detail['term_id']);
             $term_type = $current_term ? $current_term->term_name : 'Midterm'; // Midterm or Finalterm
@@ -611,16 +618,13 @@
             if($schedule->is_lec == 1) {
                 $lab_value = DB::table('lab_values')
                     ->where('student_id', '=', $value->id)
-                    // ->where('schedule_id', '=', $detail['schedule_id'])
-                    // ->where('term_id', '=', $detail['term_id'])
                     ->where('term_type', '=', $term_type)
                     ->first();
                 
                 $scaled_laboratory_grade = $lab_value ? floatval($lab_value->value_lab) : 0;
                 
-                if($scaled_laboratory_grade > 0) {
-                    $total_lab_lec_grade += $scaled_laboratory_grade;
-                }
+                // Store for weighted average calculation
+                $laboratory_component = $scaled_laboratory_grade;
             } else {
                 // For LABORATORY schedules, calculate from lab_lec_grades (existing logic)
                 $lab_lec_grade = DB::table('lab_lec_grades')
@@ -638,9 +642,10 @@
                     // Scale it to match the term weight percentage
                     $scaled_laboratory_grade = ($actual_lab_grade_percent / $term_weight_percent) * 10000;
                     
-                    $total_lab_lec_grade += $scaled_laboratory_grade;
+                    $laboratory_component = $scaled_laboratory_grade;
                 } else {
                     $scaled_laboratory_grade = 0;
+                    $laboratory_component = 0;
                 }
             }
         @endphp
@@ -664,20 +669,35 @@
 @endif
 
 <th scope="col" class="">
-    @if(floatval($total_lab_lec_grade))
-        {{ number_format(($total_lab_lec_grade/$total_lab_lec_grade_average), 2, '.', '') }}
+     @php
+        // Calculate weighted average based on Lab Lec Weight
+        $weighted_average = 0;
+        
+        if(isset($lecture_component) && isset($laboratory_component)) {
+            // Weighted Average = (Lecture × Lecture%) + (Laboratory × Laboratory%)
+            $weighted_average = ($lecture_component * ($lecture_weight_percent / 100)) + 
+                              ($laboratory_component * ($laboratory_weight_percent / 100));
+        } elseif(isset($lecture_component)) {
+            $weighted_average = $lecture_component;
+        } elseif(isset($laboratory_component)) {
+            $weighted_average = $laboratory_component;
+        }
+    @endphp
+    
+    @if($weighted_average > 0)
+        {{ number_format($weighted_average, 2, '.', '') }}
     @else
-        0   
+        0.00
     @endif
 </th>
 
 <th scope="col" class="">
-    @if(floatval($total_lab_lec_grade))
+    @if($weighted_average > 0)
         @php
         $point_grade = true;
         @endphp
         @foreach($point_grade_equivalent as $p_value)
-            @if(($total_lab_lec_grade/$total_lab_lec_grade_average) >= $p_value->minimum && $total_lab_lec_grade/$total_lab_lec_grade_average < $p_value->maximum+1)
+            @if($weighted_average >= $p_value->minimum && $weighted_average < $p_value->maximum+1)
                 {{ $p_value->grade }}
                 @php
                     $point_grade = false;
