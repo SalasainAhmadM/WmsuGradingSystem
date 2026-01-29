@@ -669,7 +669,7 @@
 @endif
 
 <th scope="col" class="">
-     @php
+    @php
         // Calculate weighted average based on Lab Lec Weight
         $weighted_average = 0;
         
@@ -682,69 +682,138 @@
         } elseif(isset($laboratory_component)) {
             $weighted_average = $laboratory_component;
         }
+        
+        // Check if student should have INC or DROP status
+        $total_school_works = 0;
+        $null_score_count = 0;
+        
+        foreach ($student_scores[$key] as $score_item) {
+            if($score_item['school_work_id'] && 
+               $score_item['weight'] > 0 && 
+               $score_item['school_work_type_id'] != $current_school_work_type->id) {
+                $total_school_works++;
+                if(is_null($score_item['score'])) {
+                    $null_score_count++;
+                }
+            }
+        }
+        
+        $is_incomplete = ($total_school_works > 0 && $null_score_count > 0);
     @endphp
     
-    @if($weighted_average > 0)
-        {{ number_format($weighted_average, 2, '.', '') }}
+    @if($is_incomplete)
+        ----
     @else
-        0.00
+        @if($weighted_average > 0)
+            {{ number_format($weighted_average, 2, '.', '') }}
+        @else
+            0.00
+        @endif
     @endif
 </th>
 
 <th scope="col" class="">
-    @if($weighted_average > 0)
-        @php
-        $point_grade = true;
-        @endphp
-        @foreach($point_grade_equivalent as $p_value)
-            @if($weighted_average >= $p_value->minimum && $weighted_average < $p_value->maximum+1)
-                {{ $p_value->grade }}
-                @php
-                    $point_grade = false;
-                @endphp
+    @if($is_incomplete)
+        ----
+    @else
+        @if($weighted_average > 0)
+            @php
+            $point_grade = true;
+            @endphp
+            @foreach($point_grade_equivalent as $p_value)
+                @if($weighted_average >= $p_value->minimum && $weighted_average < $p_value->maximum+1)
+                    {{ $p_value->grade }}
+                    @php
+                        $point_grade = false;
+                    @endphp
+                @endif
+            @endforeach
+            @if($point_grade)
+                N/A
             @endif
-        @endforeach
-        @if($point_grade)
-            N/A
+        @else 
+            0
         @endif
-    @else 
-        0
     @endif
 </th>
 <th scope="col" class="">
     @php
         $remark = 'N/A';
+        $remark_class = 'bg-light';
         $weighted_grade_value = floatval($weighted_average);
         
-        // Check if student has dropped
-        $drop_status = DB::table('term_grades')
-            ->where('schedule_id','=',$detail['schedule_id'])
-            ->where('term_id','=',$detail['term_id'])
-            ->where('student_id','=',$value->id)
-            ->where('other','=','DROP')
-            ->first();
-            
-        // Check if student has INC
-        $inc_status = DB::table('term_grades')
-            ->where('schedule_id','=',$detail['schedule_id'])
-            ->where('term_id','=',$detail['term_id'])
-            ->where('student_id','=',$value->id)
-            ->where('other','=','INC')
-            ->first();
+        // Count total school works and null scores for this student
+        $total_school_works = 0;
+        $null_score_count = 0;
         
-        if($drop_status) {
+        foreach ($student_scores[$key] as $score_item) {
+            // Only count school works that have weight and belong to non-current school work types
+            if($score_item['school_work_id'] && 
+               $score_item['weight'] > 0 && 
+               $score_item['school_work_type_id'] != $current_school_work_type->id) {
+                $total_school_works++;
+                if(is_null($score_item['score'])) {
+                    $null_score_count++;
+                }
+            }
+        }
+        
+        // Determine remark based on score completeness
+        if($total_school_works > 0 && $null_score_count == $total_school_works) {
+            // All scores are empty - DROP
             $remark = 'DROP';
             $remark_class = 'bg-secondary';
-        } elseif($inc_status || is_null($weighted_grade_value) || $weighted_grade_value == 0) {
+            
+            // Update database to mark as DROP
+            DB::table('term_grades')
+                ->where('schedule_id','=',$detail['schedule_id'])
+                ->where('term_id','=',$detail['term_id'])
+                ->where('student_id','=',$value->id)
+                ->update(['other' => 'DROP']);
+                
+        } elseif($null_score_count > 0 && $null_score_count < $total_school_works) {
+            // Some scores are empty - INC
             $remark = 'INC';
             $remark_class = 'bg-warning';
+            
+            // Update database to mark as INC
+            DB::table('term_grades')
+                ->where('schedule_id','=',$detail['schedule_id'])
+                ->where('term_id','=',$detail['term_id'])
+                ->where('student_id','=',$value->id)
+                ->update(['other' => 'INC']);
+                
+        } elseif(is_null($weighted_grade_value) || $weighted_grade_value == 0) {
+            // No valid grade - INC
+            $remark = 'INC';
+            $remark_class = 'bg-warning';
+            
         } elseif($weighted_grade_value >= 100 && $weighted_grade_value <= 300) {
+            // Grade indicates passing
             $remark = 'PASSED';
             $remark_class = 'bg-success';
+            
+            // Clear any INC/DROP status
+            DB::table('term_grades')
+                ->where('schedule_id','=',$detail['schedule_id'])
+                ->where('term_id','=',$detail['term_id'])
+                ->where('student_id','=',$value->id)
+                ->update(['other' => null]);
+                
         } elseif($weighted_grade_value == 500 || $weighted_grade_value < 60) {
+            // Grade indicates failing
             $remark = 'FAILED';
             $remark_class = 'bg-danger';
+            
+            // Clear any INC/DROP status
+            DB::table('term_grades')
+                ->where('schedule_id','=',$detail['schedule_id'])
+                ->where('term_id','=',$detail['term_id'])
+                ->where('student_id','=',$value->id)
+                ->update(['other' => null]);
+                
         } else {
+            // Default to PASSED for other cases
             $remark = 'PASSED';
             $remark_class = 'bg-success';
         }
