@@ -39,7 +39,7 @@ class FacultyEvaluationLists extends Component
 
     public $school_works = [];
 
-    public $temp_terms = [];
+    // public $temp_terms = [];
     public $schedule = NULL;
 
     public $detail = [
@@ -1091,25 +1091,25 @@ class FacultyEvaluationLists extends Component
         self::calculateAndStoreFinalGrade($student_id);
     }
 
-    public function open_term_weight($modal_id)
-    {
-        $this->term_weight['term_id'] = $this->detail['term_id'];
-        self::fetch_terms();
-        $this->temp_terms = [];
-        foreach ($this->terms as $key => $value) {
-            array_push($this->temp_terms, [
-                'id' => $value->id,
-                'weight' => floatval($value->weight),
-                'term_name' => $value->term_name
-            ]);
-        }
-        $this->dispatch('openModal', modal_id: $modal_id);
-    }
+    // public function open_term_weight($modal_id)
+    // {
+    //     $this->term_weight['term_id'] = $this->detail['term_id'];
+    //     self::fetch_terms();
+    //     $this->temp_terms = [];
+    //     foreach ($this->terms as $key => $value) {
+    //         array_push($this->temp_terms, [
+    //             'id' => $value->id,
+    //             'weight' => floatval($value->weight),
+    //             'term_name' => $value->term_name
+    //         ]);
+    //     }
+    //     $this->dispatch('openModal', modal_id: $modal_id);
+    // }
 
-    public function UpdatedTermWeightTermId()
-    {
-        self::fetch_terms();
-    }
+    // public function UpdatedTermWeightTermId()
+    // {
+    //     self::fetch_terms();
+    // }
 
 
     public function fetch_terms()
@@ -1143,25 +1143,25 @@ class FacultyEvaluationLists extends Component
         $this->term_weight['weight'] = $detail->weight;
     }
 
-    public function updateWeight($modal_id)
-    {
+    // public function updateWeight($modal_id)
+    // {
 
-        foreach ($this->temp_terms as $key => $value) {
-            $res = DB::table('terms')
-                ->where('schedule_id', '=', $this->detail['schedule_id'])
-                ->where('id', '=', $value['id'])
-                ->update([
-                    'weight' => floatval($value['weight'])
-                ]);
-        }
-        $this->dispatch(
-            'notifySuccess',
-            'Updated successfully!',
-            ''
-        );
-        self::terms($this->detail['schedule_id']);
-        self::updateFinalGrades();
-    }
+    //     foreach ($this->temp_terms as $key => $value) {
+    //         $res = DB::table('terms')
+    //             ->where('schedule_id', '=', $this->detail['schedule_id'])
+    //             ->where('id', '=', $value['id'])
+    //             ->update([
+    //                 'weight' => floatval($value['weight'])
+    //             ]);
+    //     }
+    //     $this->dispatch(
+    //         'notifySuccess',
+    //         'Updated successfully!',
+    //         ''
+    //     );
+    //     self::terms($this->detail['schedule_id']);
+    //     self::updateFinalGrades();
+    // }
 
     public function viewAttendance($modal_id)
     {

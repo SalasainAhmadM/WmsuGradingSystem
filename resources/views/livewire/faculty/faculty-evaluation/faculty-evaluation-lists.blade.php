@@ -112,14 +112,7 @@
                 </button>
             @endif
             
-            <button class="btn btn-outline-primary" 
-                    wire:click="open_term_weight('weightModal')"
-                    data-bs-toggle="popover" 
-                    data-bs-trigger="hover" 
-                    data-bs-placement="top" 
-                    data-bs-content="Term Weight">
-                <svg viewBox="0 0 24 24" height="20px" width="20px" fill="none" xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <path d="M3.99923 21H19.9992M11.9992 21V7M11.9992 7C13.1038 7 13.9992 6.10457 13.9992 5M11.9992 7C10.8947 7 9.99923 6.10457 9.99923 5M13.9992 5C13.9992 3.89543 13.1038 3 11.9992 3C10.8947 3 9.99923 3.89543 9.99923 5M13.9992 5H19.9992M9.99923 5H3.99923M5.99923 17C7.51177 17 8.76287 16.1584 8.96934 14.7513C8.98242 14.6621 8.98897 14.6175 8.98385 14.5186C8.98031 14.4503 8.95717 14.3256 8.93599 14.2605C8.90531 14.1664 8.86812 14.1003 8.79375 13.968L5.99923 9L3.2047 13.968C3.13575 14.0906 3.10128 14.1519 3.06939 14.2584C3.04977 14.3239 3.02706 14.4811 3.02735 14.5494C3.02781 14.6606 3.03453 14.6899 3.04799 14.7486C3.30295 15.86 4.5273 17 5.99923 17ZM17.9992 17C19.5118 17 20.7629 16.1584 20.9693 14.7513C20.9824 14.6621 20.989 14.6175 20.9838 14.5186C20.9803 14.4503 20.9572 14.3256 20.936 14.2605C20.9053 14.1664 20.8681 14.1003 20.7937 13.968L17.9992 9L15.2047 13.968C15.1358 14.0906 15.1013 14.1519 15.0694 14.2584C15.0498 14.3239 15.0271 14.4811 15.0273 14.5494C15.0278 14.6606 15.0345 14.6899 15.048 14.7486C15.303 15.86 16.5273 17 17.9992 17Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path> </g></svg>
-            </button>
+    
             
             <button class="btn btn-outline-primary" 
                     wire:click="open_school_work_modal('addSchoolWorkModal')"
@@ -256,7 +249,7 @@
                                 <th colspan="1" class="text-center">No School Work Type</th>
                             @endforelse
                             <th class="">Total</th>
-                            <th class="">Total Term Grade</th>
+                            {{-- <th class="">Total Term Grade</th> --}}
                             @php
                                 $current_term = collect($terms)->firstWhere('id', $detail['term_id']);
                             @endphp
@@ -299,7 +292,7 @@
                                 ->where('schedule_id','=',$detail['schedule_id'])
                                 ->first();
                             @endphp
-                            <th scope="col" class="">{{ number_format($term_weight['weight'] ?? 100, 2) }}%</th>
+                            {{-- <th scope="col" class="">{{ number_format($term_weight['weight'] ?? 100, 2) }}%</th> --}}
                             @if($schedule->is_lec)
                                 <th scope="col" class="">Lecture</th>
                             @endif
@@ -539,7 +532,7 @@
     $grade = $current_term_grade ? $current_term_grade->grade : NULL;
 @endphp
 
-<td>
+{{-- <td>
     @if(floatval($grade) && !$inc)
         {{ number_format($grade*100, 2, '.', '') }}
     @else
@@ -556,7 +549,7 @@
             <input type="text" class="form-control" value="{{$grade }}" wire:change="updateLabLecGrades({{ $lab_lec_grades->id }},{{ $value->id }},$event.target.value)">
         @endif
     @endif
-</td>
+</td> --}}
 
 @php
     $total_grade = 0;
@@ -1086,36 +1079,6 @@
             </div>
         </div>
 
-        <div class="modal fade" id="weightModal" wire:ignore.self data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="staticBackdropLabel" aria-hidden="true">
-            <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
-                <form class="w-100" wire:submit.prevent="updateWeight('weightModal')">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h1 class="modal-title fs-5" id="weightModalTitle">Term Weight Percentage</h1>
-                            <button type="button" class="btn-close" data-bs-dismiss="modal" id="weightModalclose" aria-label="Close"></button>
-                        </div>
-                        <div class="modal-body row">
-                            @foreach ($temp_terms as $key =>$value )
-                                <div class="col-md-6 mb-3">
-                                    <label for="weight" class="form-label">{{ $value['term_name'] }} weight percentage</label>
-                                    <input type="number" min="1" step="0.1" id="weight" wire:model="temp_terms.{{ $key }}.weight" placeholder="Term Weight" 
-                                        class="form-control @error('term_weight.weight') is-invalid @enderror">
-                                    @error('temp_terms.weight')
-                                        <div class="invalid-feedback">{{ $message }}</div>
-                                    @enderror
-                                </div>
-                            @endforeach
-                        </div>
-                        <div class="modal-footer">
-                            <button class="btn btn-success">
-                                Save
-                            </button>
-                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                        </div>
-                    </div>
-                </form>
-            </div>
-        </div>
 
         <div class="modal fade" id="lablecweightModal" wire:ignore.self data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="staticBackdropLabel" aria-hidden="true">
             <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
