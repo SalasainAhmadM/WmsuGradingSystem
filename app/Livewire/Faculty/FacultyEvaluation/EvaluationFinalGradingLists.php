@@ -1228,6 +1228,22 @@ class EvaluationFinalGradingLists extends Component
             $students = $students->whereIn('id', $student_ids);
         }
 
+        // Calculate average lab/lecture weights
+        $all_terms_lab_lec = DB::table('lab_lec')
+            ->where('schedule_id', '=', $this->detail['schedule_id'])
+            ->get();
+
+        $total_lecture_weight = 0;
+        $term_count = 0;
+
+        foreach ($all_terms_lab_lec as $term_lab_lec) {
+            $total_lecture_weight += floatval($term_lab_lec->sub_weight);
+            $term_count++;
+        }
+
+        $avg_lecture_weight_percent = $term_count > 0 ? $total_lecture_weight / $term_count : 50;
+        $avg_lab_weight_percent = 100 - $avg_lecture_weight_percent;
+
         // Prepare CSV content
         $filename = 'final_grades_' . $this->school_year . '_' . $this->semester . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.csv';
 
@@ -1236,7 +1252,7 @@ class EvaluationFinalGradingLists extends Component
             'Content-Disposition' => 'attachment; filename="' . $filename . '"',
         ];
 
-        $callback = function () use ($students) {
+        $callback = function () use ($students, $avg_lecture_weight_percent, $avg_lab_weight_percent) {
             $file = fopen('php://output', 'w');
 
             // Add BOM for UTF-8
@@ -1246,10 +1262,10 @@ class EvaluationFinalGradingLists extends Component
             $header = ['#', 'Student Code', 'Student Name', 'College', 'Department', 'Year Level'];
 
             if ($this->schedule->is_lec) {
-                $header[] = 'Lecture Grade';
+                $header[] = 'Lecture Grade (Weighted)';
             }
             if ($this->schedule->laboratory_unit > 0) {
-                $header[] = 'Laboratory Grade';
+                $header[] = 'Laboratory Grade (Weighted)';
             }
             $header[] = 'Total Grade';
             $header[] = 'Weighted Grade';
@@ -1274,21 +1290,46 @@ class EvaluationFinalGradingLists extends Component
                     $student->year_level ?? 'N/A'
                 ];
 
+                // Calculate weighted lecture grade
                 if ($this->schedule->is_lec) {
-                    $row[] = $final_grade && $final_grade->lecture_grade !== null
-                        ? number_format($final_grade->lecture_grade, 2, '.', '')
-                        : '';
+                    $weighted_lecture = '';
+                    if ($final_grade && $final_grade->lecture_grade !== null) {
+                        $weighted_lecture = $final_grade->lecture_grade * ($avg_lecture_weight_percent / 100);
+                        $weighted_lecture = number_format($weighted_lecture, 2, '.', '');
+                    }
+                    $row[] = $weighted_lecture;
                 }
 
+                // Calculate weighted laboratory grade
                 if ($this->schedule->laboratory_unit > 0) {
-                    $row[] = $final_grade && $final_grade->laboratory_grade !== null
-                        ? number_format($final_grade->laboratory_grade, 2, '.', '')
-                        : '';
+                    $weighted_laboratory = '';
+                    if ($final_grade && $final_grade->laboratory_grade !== null) {
+                        $weighted_laboratory = $final_grade->laboratory_grade * ($avg_lab_weight_percent / 100);
+                        $weighted_laboratory = number_format($weighted_laboratory, 2, '.', '');
+                    }
+                    $row[] = $weighted_laboratory;
                 }
 
-                $row[] = $final_grade && $final_grade->total_grade !== null
-                    ? number_format($final_grade->total_grade, 2, '.', '')
-                    : '';
+                // Calculate weighted total grade
+                $weighted_total = '';
+                if ($final_grade && $final_grade->total_grade !== null) {
+                    if ($this->schedule->is_lec && $final_grade->lecture_grade !== null && $final_grade->laboratory_grade !== null) {
+                        // Both lecture and lab exist
+                        $weighted_total = ($final_grade->lecture_grade * ($avg_lecture_weight_percent / 100)) + 
+                                        ($final_grade->laboratory_grade * ($avg_lab_weight_percent / 100));
+                    } elseif ($this->schedule->is_lec && $final_grade->lecture_grade !== null) {
+                        // Lecture only
+                        $weighted_total = $final_grade->lecture_grade;
+                    } elseif ($final_grade->laboratory_grade !== null) {
+                        // Laboratory only
+                        $weighted_total = $final_grade->laboratory_grade;
+                    }
+                    
+                    if ($weighted_total !== '') {
+                        $weighted_total = number_format($weighted_total, 2, '.', '');
+                    }
+                }
+                $row[] = $weighted_total;
 
                 $row[] = $final_grade && $final_grade->weighted_grade !== null
                     ? number_format($final_grade->weighted_grade, 2, '.', '')
@@ -1346,6 +1387,22 @@ class EvaluationFinalGradingLists extends Component
             $students = $students->whereIn('id', $student_ids);
         }
 
+        // Calculate average lab/lecture weights
+        $all_terms_lab_lec = DB::table('lab_lec')
+            ->where('schedule_id', '=', $this->detail['schedule_id'])
+            ->get();
+
+        $total_lecture_weight = 0;
+        $term_count = 0;
+
+        foreach ($all_terms_lab_lec as $term_lab_lec) {
+            $total_lecture_weight += floatval($term_lab_lec->sub_weight);
+            $term_count++;
+        }
+
+        $avg_lecture_weight_percent = $term_count > 0 ? $total_lecture_weight / $term_count : 50;
+        $avg_lab_weight_percent = 100 - $avg_lecture_weight_percent;
+
         // Create Excel content
         $filename = 'final_grades_' . $this->school_year . '_' . $this->semester . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.xls';
 
@@ -1357,7 +1414,7 @@ class EvaluationFinalGradingLists extends Component
             'Expires' => '0',
         ];
 
-        $callback = function () use ($students) {
+        $callback = function () use ($students, $avg_lecture_weight_percent, $avg_lab_weight_percent) {
             echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
             echo '<head>';
             echo '<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">';
@@ -1370,6 +1427,7 @@ class EvaluationFinalGradingLists extends Component
             echo 'th, td { border: 1px solid black; padding: 8px; text-align: left; }';
             echo 'th { background-color: #952323; color: white; font-weight: bold; }';
             echo '.text-center { text-align: center; }';
+            echo '.bg-highlight { background-color: #FFF3CD; font-weight: bold; }';
             echo '.badge-passed { background-color: #198754; color: white; font-weight: bold; padding: 5px 10px; }';
             echo '.badge-failed { background-color: #dc3545; color: white; font-weight: bold; padding: 5px 10px; }';
             echo '.badge-inc { background-color: #ffc107; color: black; font-weight: bold; padding: 5px 10px; }';
@@ -1399,10 +1457,10 @@ class EvaluationFinalGradingLists extends Component
             echo '<th>Year Level</th>';
 
             if ($this->schedule->is_lec) {
-                echo '<th>Lecture Grade</th>';
+                echo '<th>Lecture Grade (Weighted)</th>';
             }
             if ($this->schedule->laboratory_unit > 0) {
-                echo '<th>Laboratory Grade</th>';
+                echo '<th>Laboratory Grade (Weighted)</th>';
             }
             echo '<th>Total Grade</th>';
             echo '<th>Weighted Grade</th>';
@@ -1425,27 +1483,46 @@ class EvaluationFinalGradingLists extends Component
                 echo '<td>' . htmlspecialchars($student->department ?? 'N/A') . '</td>';
                 echo '<td>' . htmlspecialchars($student->year_level ?? 'N/A') . '</td>';
 
+                // Calculate and display weighted lecture grade
                 if ($this->schedule->is_lec) {
-                    echo '<td class="text-center">' .
-                        ($final_grade && $final_grade->lecture_grade !== null
-                            ? number_format($final_grade->lecture_grade, 2, '.', '')
-                            : '') .
-                        '</td>';
+                    $weighted_lecture = '';
+                    if ($final_grade && $final_grade->lecture_grade !== null) {
+                        $weighted_lecture = $final_grade->lecture_grade * ($avg_lecture_weight_percent / 100);
+                        $weighted_lecture = number_format($weighted_lecture, 2, '.', '');
+                    }
+                    echo '<td class="text-center">' . $weighted_lecture . '</td>';
                 }
 
+                // Calculate and display weighted laboratory grade
                 if ($this->schedule->laboratory_unit > 0) {
-                    echo '<td class="text-center">' .
-                        ($final_grade && $final_grade->laboratory_grade !== null
-                            ? number_format($final_grade->laboratory_grade, 2, '.', '')
-                            : '') .
-                        '</td>';
+                    $weighted_laboratory = '';
+                    if ($final_grade && $final_grade->laboratory_grade !== null) {
+                        $weighted_laboratory = $final_grade->laboratory_grade * ($avg_lab_weight_percent / 100);
+                        $weighted_laboratory = number_format($weighted_laboratory, 2, '.', '');
+                    }
+                    echo '<td class="text-center">' . $weighted_laboratory . '</td>';
                 }
 
-                echo '<td class="text-center">' .
-                    ($final_grade && $final_grade->total_grade !== null
-                        ? number_format($final_grade->total_grade, 2, '.', '')
-                        : '') .
-                    '</td>';
+                // Calculate and display weighted total grade
+                $weighted_total = '';
+                if ($final_grade && $final_grade->total_grade !== null) {
+                    if ($this->schedule->is_lec && $final_grade->lecture_grade !== null && $final_grade->laboratory_grade !== null) {
+                        // Both lecture and lab exist
+                        $weighted_total = ($final_grade->lecture_grade * ($avg_lecture_weight_percent / 100)) + 
+                                        ($final_grade->laboratory_grade * ($avg_lab_weight_percent / 100));
+                    } elseif ($this->schedule->is_lec && $final_grade->lecture_grade !== null) {
+                        // Lecture only
+                        $weighted_total = $final_grade->lecture_grade;
+                    } elseif ($final_grade->laboratory_grade !== null) {
+                        // Laboratory only
+                        $weighted_total = $final_grade->laboratory_grade;
+                    }
+                    
+                    if ($weighted_total !== '') {
+                        $weighted_total = number_format($weighted_total, 2, '.', '');
+                    }
+                }
+                echo '<td class="text-center bg-highlight">' . $weighted_total . '</td>';
 
                 echo '<td class="text-center">' .
                     ($final_grade && $final_grade->weighted_grade !== null

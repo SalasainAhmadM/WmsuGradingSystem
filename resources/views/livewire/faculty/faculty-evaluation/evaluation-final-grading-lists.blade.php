@@ -222,34 +222,76 @@
                                 {{-- Get final grades data from the final_grades array --}}
                                 @php
                                     $student_final_grade = isset($final_grades[$value->id]) ? $final_grades[$value->id] : null;
+                                    
+                                    // Get the lab/lec weight for calculating weighted contributions
+                                    // Get average of all terms' lab_lec weights
+                                    $all_terms_lab_lec = DB::table('lab_lec')
+                                        ->where('schedule_id', '=', $detail['schedule_id'])
+                                        ->get();
+                                    
+                                    $total_lecture_weight = 0;
+                                    $total_lab_weight = 0;
+                                    $term_count = 0;
+                                    
+                                    foreach($all_terms_lab_lec as $term_lab_lec) {
+                                        $total_lecture_weight += floatval($term_lab_lec->sub_weight);
+                                        $term_count++;
+                                    }
+                                    
+                                    $avg_lecture_weight_percent = $term_count > 0 ? $total_lecture_weight / $term_count : 50;
+                                    $avg_lab_weight_percent = 100 - $avg_lecture_weight_percent;
                                 @endphp
                                 
-                                {{-- Lecture Grade --}}
+                                {{-- Lecture Grade (Weighted) --}}
                                 @if($schedule->is_lec)
                                     <td class="text-center">
                                         @if($student_final_grade && $student_final_grade['lecture_grade'] !== null)
-                                            {{ number_format($student_final_grade['lecture_grade'], 2, '.', '') }}
+                                            @php
+                                                // Apply lecture weight percentage
+                                                $weighted_lecture = $student_final_grade['lecture_grade'] * ($avg_lecture_weight_percent / 100);
+                                            @endphp
+                                            {{ number_format($weighted_lecture, 2, '.', '') }}
                                         @else
                                             <span class="text-muted">--</span>
                                         @endif
                                     </td>
                                 @endif
                                 
-                                {{-- Laboratory Grade --}}
+                                {{-- Laboratory Grade (Weighted) --}}
                                 @if($schedule->laboratory_unit > 0 || $schedule->is_lec == 0)
                                     <td class="text-center">
                                         @if($student_final_grade && $student_final_grade['laboratory_grade'] !== null)
-                                            {{ number_format($student_final_grade['laboratory_grade'], 2, '.', '') }}
+                                            @php
+                                                // Apply laboratory weight percentage
+                                                $weighted_laboratory = $student_final_grade['laboratory_grade'] * ($avg_lab_weight_percent / 100);
+                                            @endphp
+                                            {{ number_format($weighted_laboratory, 2, '.', '') }}
                                         @else
                                             <span class="text-muted">--</span>
                                         @endif
                                     </td>
                                 @endif
                                 
-                                {{-- Total Grade --}}
-                                <td class="text-center">
+                                {{-- Total Grade (Weighted Average) --}}
+                                <td class="text-center" style="background-color: #FFF3CD; font-weight: bold;">
                                     @if($student_final_grade && $student_final_grade['total_grade'] !== null)
-                                        {{ number_format($student_final_grade['total_grade'], 2, '.', '') }}
+                                        @php
+                                            // Calculate weighted total
+                                            $weighted_total = 0;
+                                            
+                                            if($schedule->is_lec && $student_final_grade['lecture_grade'] !== null && $student_final_grade['laboratory_grade'] !== null) {
+                                                // Both lecture and lab exist
+                                                $weighted_total = ($student_final_grade['lecture_grade'] * ($avg_lecture_weight_percent / 100)) + 
+                                                                ($student_final_grade['laboratory_grade'] * ($avg_lab_weight_percent / 100));
+                                            } elseif($schedule->is_lec && $student_final_grade['lecture_grade'] !== null) {
+                                                // Lecture only
+                                                $weighted_total = $student_final_grade['lecture_grade'];
+                                            } elseif($student_final_grade['laboratory_grade'] !== null) {
+                                                // Laboratory only
+                                                $weighted_total = $student_final_grade['laboratory_grade'];
+                                            }
+                                        @endphp
+                                        {{ number_format($weighted_total, 2, '.', '') }}
                                     @else
                                         <span class="text-muted">--</span>
                                     @endif
@@ -264,27 +306,18 @@
                                     @endif
                                 </td>
 
+                                {{-- Remarks --}}
                                 <td class="text-center">
                                     @php
-                                        $weighted_grade = $student_final_grade['weighted_grade'] ?? null;
+                                        $remarks = $student_final_grade['remarks'] ?? 'N/A';
                                         
-                                        // Determine remarks based on weighted grade (1.0-5.0 scale)
-                                        if ($weighted_grade !== null && $weighted_grade > 0) {
-                                            if ($weighted_grade >= 1.0 && $weighted_grade <= 3.0) {
-                                                $remarks = 'PASSED';
-                                                $badge_class = 'bg-success';
-                                            } elseif ($weighted_grade >= 3.1 && $weighted_grade <= 5.0) {
-                                                $remarks = 'FAILED';
-                                                $badge_class = 'bg-danger';
-                                            } else {
-                                                // Handle out of range values
-                                                $remarks = 'N/A';
-                                                $badge_class = 'bg-light';
-                                            }
-                                        } else {
-                                            $remarks = 'N/A';
-                                            $badge_class = 'bg-light';
-                                        }
+                                        $badge_class = match($remarks) {
+                                            'PASSED' => 'bg-success',
+                                            'FAILED' => 'bg-danger',
+                                            'INC' => 'bg-warning',
+                                            'DROP' => 'bg-secondary',
+                                            default => 'bg-light'
+                                        };
                                     @endphp
                                     <span class="badge-remarks {{ $badge_class }}">
                                         {{ $remarks }}
