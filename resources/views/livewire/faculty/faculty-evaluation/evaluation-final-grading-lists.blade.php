@@ -265,22 +265,30 @@
                                 </td>
 
                                 <td class="text-center">
-                                    @if($student_final_grade && $student_final_grade['remarks'])
-                                        @php
-                                            $badge_class = match($student_final_grade['remarks']) {
-                                                'PASSED' => 'bg-success',
-                                                'FAILED' => 'bg-danger',
-                                                'INC' => 'bg-warning',
-                                                'DROP' => 'bg-secondary',
-                                                default => 'bg-light'
-                                            };
-                                        @endphp
-                                        <span class="badge-remarks {{ $badge_class }}">
-                                            {{ $student_final_grade['remarks'] }}
-                                        </span>
-                                    @else
-                                        <span class="badge-remarks bg-light">N/A</span>
-                                    @endif
+                                    @php
+                                        $weighted_grade = $student_final_grade['weighted_grade'] ?? null;
+                                        
+                                        // Determine remarks based on weighted grade (1.0-5.0 scale)
+                                        if ($weighted_grade !== null && $weighted_grade > 0) {
+                                            if ($weighted_grade >= 1.0 && $weighted_grade <= 3.0) {
+                                                $remarks = 'PASSED';
+                                                $badge_class = 'bg-success';
+                                            } elseif ($weighted_grade >= 3.1 && $weighted_grade <= 5.0) {
+                                                $remarks = 'FAILED';
+                                                $badge_class = 'bg-danger';
+                                            } else {
+                                                // Handle out of range values
+                                                $remarks = 'N/A';
+                                                $badge_class = 'bg-light';
+                                            }
+                                        } else {
+                                            $remarks = 'N/A';
+                                            $badge_class = 'bg-light';
+                                        }
+                                    @endphp
+                                    <span class="badge-remarks {{ $badge_class }}">
+                                        {{ $remarks }}
+                                    </span>
                                 </td>
                             </tr>
                         @empty
