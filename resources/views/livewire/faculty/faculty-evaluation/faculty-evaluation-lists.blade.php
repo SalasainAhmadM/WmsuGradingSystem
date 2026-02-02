@@ -239,7 +239,7 @@
                                 @endphp
                                 @if($value->weight > 0)
                                     @if($value->id != $current_school_work_type->id)
-                                        <th colspan="{{ ( $school_works_var->total >0 ? intval($school_works_var->total) + 1: 1) }}" 
+                                        <th colspan="{{ ( $school_works_var->total >0 ? intval($school_works_var->total) + 2: 2) }}" 
                                             class="text-center">{{$value->school_work_type}} {{ number_format($value->weight /$weight->total_weight * 100, 2, '.', '') }}%</th>
                                     @else
                                         <th colspan="1" class="text-center">{{$value->school_work_type}} {{ number_format($value->weight / $weight->total_weight * 100 , 2, '.', '') }}%</th>
@@ -274,12 +274,14 @@
                                             @if($value->id != $current_school_work_type->id)
                                                 <th class="text-center">{{ $v_value->school_work_name }} : {{ $v_value->max_score }}<br>{{ date_format(date_create($v_value->schedule_date) ,"M d, Y");}}</th>
                                             @else
-                                               
+                                            
                                             @endif
                                         @endforeach
-                                        <th class="text-center">Avg - {{ number_format($value->weight /$weight->total_weight * 100, 2, '.', '') }}%</th>
+                                        <th class="text-center">Avg </th>
+                                        <th class="text-center">{{ number_format($value->weight /$weight->total_weight * 100, 2, '.', '') }}%</th>
                                     @else 
                                         <th class="text-center">No Data</th>
+                                        <th class="text-center">{{ number_format($value->weight /$weight->total_weight * 100, 2, '.', '') }}%</th>
                                     @endif
                                 @endif
                             @empty
@@ -389,32 +391,40 @@
                                         @endif
                                     @else
                                         @if( $v_value['school_work_type_id'] != $current_school_work_type->id )
-                                            @if($v_value['weight'] > 0)
-                                                <td class="">
-                                                    <span>
-                                                        @if($sub_total_score)
-                                                            <!-- {{ $sub_total_score}} / {{$sub_total_max_score }} -->
-                                                            
-                                                            @php
-                                                                $sub_total = $sub_average / $school_work_type_count_prev
-                                                            @endphp
-                                                            {{ number_format( $sub_total*100, 2, '.', '')    }}
-                                                            <!-- {{  number_format(( $sub_total * $school_work_type_weight), 2, '.', '')}} -->
+                                        @if($v_value['weight'] > 0)
+                                            <td class="">
+                                                <span>
+                                                    @if($sub_total_score)
                                                         @php
-                                                                $total_grade +=  ($sub_total * $school_work_type_weight/100);
-                                                                $sub_average = 0;
+                                                            $sub_total = $sub_average / $school_work_type_count_prev;
+                                                            $weighted_contribution = $sub_total * $school_work_type_weight;
                                                         @endphp
-                                                        @else 
-                                                        ---- 
-                                                        @endif
-                                                    </span>
-                                                </td>
-                                            @else
-                                                @php
-                                                  $sub_average = 0;
-                                                @endphp
-                                            @endif
+                                                        {{ number_format($sub_total*100, 2, '.', '')}}
+                                                    @php
+                                                            $total_grade += ($sub_total * $school_work_type_weight/100);
+                                                            $sub_average = 0;
+                                                    @endphp
+                                                    @else 
+                                                    ---- 
+                                                    @endif
+                                                </span>
+                                            </td>
+                                            {{-- NEW WEIGHTED COLUMN --}}
+                                            <td class="bg-light">
+                                                <span>
+                                                    @if($sub_total_score)
+                                                        <strong>{{ number_format($weighted_contribution, 2, '.', '') }}</strong>
+                                                    @else
+                                                        ----
+                                                    @endif
+                                                </span>
+                                            </td>
+                                        @else
+                                            @php
+                                            $sub_average = 0;
+                                            @endphp
                                         @endif
+                                    @endif
                                     @endif
                                 @endforeach
                                 <td>
