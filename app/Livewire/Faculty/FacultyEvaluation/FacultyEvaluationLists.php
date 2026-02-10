@@ -2679,14 +2679,9 @@ class FacultyEvaluationLists extends Component
     }
 
     public function storeLaboratoryValues()
-    {
-        // Only process if this is a laboratory schedule (not lecture)
-        if (!$this->schedule || $this->schedule->is_lec == 1) {
-            return;
-        }
-
-        // Create table if it doesn't exist (run once)
-        DB::statement("
+{
+    // Create table if it doesn't exist
+    DB::statement("
         CREATE TABLE IF NOT EXISTS lab_values (
             id INT AUTO_INCREMENT PRIMARY KEY,
             student_id INT NOT NULL,
@@ -2700,6 +2695,8 @@ class FacultyEvaluationLists extends Component
         )
     ");
 
+    // Handle LABORATORY schedules (is_lec = 0)
+    if ($this->schedule && $this->schedule->is_lec == 0) {
         // Get all enrolled students for this schedule
         $students = DB::table('enrolled_students as es')
             ->select('s.id')
@@ -2713,38 +2710,88 @@ class FacultyEvaluationLists extends Component
             ->orderBy('term_order', 'asc')
             ->get();
 
-        foreach ($all_terms as $term) {
-            $term_type = $term->term_name; // Midterm, Finalterm, etc.
-            $term_weight_percent = $term->weight;
+        // Get weight totals for school work types
+        $weight = DB::table('school_works_types')
+            ->select(DB::raw('sum(weight) as total_weight'))
+            ->where('schedule_id', '=', $this->detail['schedule_id'])
+            ->where('term_id', '=', $this->detail['term_id'])
+            ->first();
 
-            foreach ($students as $student) {
-                // Get laboratory grade for this specific term
-                if (count($this->laboratory_schedules) > 0) {
-                    // Get the term grade for THIS SPECIFIC TERM from the laboratory schedule
-                    $lab_term_grade = DB::table('term_grades')
-                        ->where('schedule_id', '=', $this->laboratory_schedules[0]->id)
-                        ->where('student_id', '=', $student->id)
-                        ->where('term_id', '=', $term->id)
-                        ->first();
+        foreach ($students as $student) {
+            foreach ($all_terms as $term) {
+                $term_type = $term->term_name; // Midterm, Finalterm, etc.
+                
+                // Calculate total grade from school work types for this term
+                $total_grade = 0;
+                $has_scores = false;
+                $has_null_scores = false;
+                
+                // Get school work types for this term
+                $school_work_types_for_term = DB::table('school_works_types')
+                    ->where('schedule_id', '=', $this->detail['schedule_id'])
+                    ->where('term_id', '=', $term->id)
+                    ->orderBy('number_order', 'asc')
+                    ->get();
+                
+                foreach ($school_work_types_for_term as $swt) {
+                    if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id) {
+                        $school_works = DB::table('school_works as sw')
+                            ->select('sw.id', 'sw.max_score', 'sws.score')
+                            ->leftJoin('school_work_scores as sws', 'sws.school_work_id', 'sw.id')
+                            ->where('sw.school_work_type_id', '=', $swt->id)
+                            ->where('sw.schedule_id', '=', $this->detail['schedule_id'])
+                            ->where('sw.term_id', '=', $term->id)
+                            ->where(function ($query) use ($student) {
+                                $query->whereNull('sws.student_id')
+                                    ->orWhere('sws.student_id', $student->id);
+                            })
+                            ->get();
 
-                    // Calculate scaled laboratory value
-                    $value_lab = null;
+                        $school_work_count = 0;
+                        $school_work_average = 0;
+                        
+                        foreach ($school_works as $sw) {
+                            if ($sw->score !== null && $sw->max_score > 0) {
+                                $school_work_average += ($sw->score / $sw->max_score);
+                                $school_work_count++;
+                                $has_scores = true;
+                            } elseif ($sw->score === null) {
+                                $has_null_scores = true;
+                            }
+                        }
 
-                    // Only calculate if we have a grade for this specific term
-                    if ($lab_term_grade && floatval($lab_term_grade->grade)) {
-                        // The grade in term_grades is already the calculated term grade (0-100 scale)
-                        // We need to scale it based on the term weight
-
-                        // Calculate the actual grade percentage
-                        $actual_lab_grade_percent = floatval($lab_term_grade->grade) * 100;
-
-                        // Scale it to match the term weight percentage
-                        // Formula: (actual_grade / term_weight) * 10000
-                        $value_lab = ($actual_lab_grade_percent / $term_weight_percent) * 100;
+                        if ($school_work_count > 0) {
+                            $sub_total = $school_work_average / $school_work_count;
+                            $school_work_type_weight = $weight->total_weight ? ($swt->weight / $weight->total_weight * 100) : 0;
+                            $total_grade += ($sub_total * $school_work_type_weight / 100);
+                        }
                     }
+                }
 
-                    // Insert or update the lab value for THIS SPECIFIC TERM
-                    DB::statement("
+                // Convert to percentage and scale (total_grade is in decimal form)
+                $value_lab = $total_grade > 0 ? ($total_grade * 100) : null;
+                
+                // Check for INC or DROP status
+                $term_grade_status = DB::table('term_grades')
+                    ->where('schedule_id', '=', $this->detail['schedule_id'])
+                    ->where('student_id', '=', $student->id)
+                    ->where('term_id', '=', $term->id)
+                    ->first();
+                
+                // Determine status based on scores
+                if ($has_null_scores && $has_scores) {
+                    $term_type = 'INC';
+                    $value_lab = null;
+                } elseif (!$has_scores) {
+                    $term_type = 'DROP';
+                    $value_lab = null;
+                } elseif ($term_grade_status && $term_grade_status->other) {
+                    $term_type = $term_grade_status->other;
+                    $value_lab = null;
+                }
+
+                // Insert or update the lab value
+                DB::statement("
                     INSERT INTO lab_values (student_id, schedule_id, term_id, term_type, value_lab)
                     VALUES (?, ?, ?, ?, ?)
                     ON DUPLICATE KEY UPDATE
@@ -2752,15 +2799,117 @@ class FacultyEvaluationLists extends Component
                         value_lab = VALUES(value_lab),
                         updated_at = CURRENT_TIMESTAMP
                 ", [
-                        $student->id,
-                        $this->detail['schedule_id'], // Store the LECTURE schedule_id
-                        $term->id,
-                        $term_type,
-                        $value_lab
-                    ]);
-                }
+                    $student->id,
+                    $this->detail['schedule_id'],
+                    $term->id,
+                    $term_type,
+                    $value_lab
+                ]);
             }
         }
+        
+        return;
     }
+
+    // Handle LECTURE schedules with laboratory component (existing logic)
+    if (!$this->schedule || $this->schedule->is_lec != 1 || $this->schedule->laboratory_unit <= 0) {
+        return;
+    }
+
+    // Only proceed if we have laboratory schedules
+    if (count($this->laboratory_schedules) <= 0) {
+        return;
+    }
+
+    // Get all enrolled students for this schedule
+    $students = DB::table('enrolled_students as es')
+        ->select('s.id')
+        ->leftJoin('students as s', 's.id', 'es.student_id')
+        ->where('es.schedule_id', '=', $this->detail['schedule_id'])
+        ->get();
+
+    // Get all terms for this schedule
+    $all_terms = DB::table('terms')
+        ->where('schedule_id', '=', $this->detail['schedule_id'])
+        ->orderBy('term_order', 'asc')
+        ->get();
+
+    // Get corresponding laboratory schedule terms
+    $lab_schedule_id = $this->laboratory_schedules[0]->id;
+    $lab_terms = DB::table('terms')
+        ->where('schedule_id', '=', $lab_schedule_id)
+        ->orderBy('term_order', 'asc')
+        ->get();
+
+    foreach ($students as $student) {
+        foreach ($all_terms as $key => $term) {
+            $term_type = $term->term_name;
+            
+            // Get corresponding laboratory term
+            $lab_term = $lab_terms[$key] ?? null;
+            
+            if (!$lab_term) {
+                continue;
+            }
+
+            // Get laboratory grade from the laboratory schedule for this term
+            $lab_lec_grade = DB::table('lab_lec_grades')
+                ->where('schedule_id', '=', $lab_schedule_id)
+                ->where('student_id', '=', $student->id)
+                ->first();
+
+            // Get lab weight for the laboratory schedule
+            $lab_lec_weight = DB::table('lab_lec')
+                ->where('schedule_id', '=', $lab_schedule_id)
+                ->where('term_id', '=', $lab_term->id)
+                ->first();
+
+            $value_lab = null;
+
+            // Calculate the laboratory value
+            if ($lab_lec_grade && floatval($lab_lec_grade->grade) && $lab_lec_weight) {
+                $lab_term_grade = DB::table('term_grades')
+                    ->where('schedule_id', '=', $lab_schedule_id)
+                    ->where('student_id', '=', $student->id)
+                    ->where('term_id', '=', $lab_term->id)
+                    ->first();
+
+                if ($lab_term_grade && floatval($lab_term_grade->grade)) {
+                    $term_weight_percent = $term->weight;
+                    $actual_lab_grade_percent = ($lab_term_grade->grade / $lab_lec_weight->sub_weight) * 100;
+                    $value_lab = ($actual_lab_grade_percent / $term_weight_percent) * 10000;
+                }
+            }
+
+            // Check for INC or DROP status
+            $lab_term_grade_status = DB::table('term_grades')
+                ->where('schedule_id', '=', $lab_schedule_id)
+                ->where('student_id', '=', $student->id)
+                ->where('term_id', '=', $lab_term->id)
+                ->first();
+
+            if ($lab_term_grade_status && $lab_term_grade_status->other) {
+                $value_lab = null;
+                $term_type = $lab_term_grade_status->other;
+            }
+
+            // Insert or update the lab value
+            DB::statement("
+                INSERT INTO lab_values (student_id, schedule_id, term_id, term_type, value_lab)
+                VALUES (?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    term_type = VALUES(term_type),
+                    value_lab = VALUES(value_lab),
+                    updated_at = CURRENT_TIMESTAMP
+            ", [
+                $student->id,
+                $this->detail['schedule_id'],
+                $term->id,
+                $term_type,
+                $value_lab
+            ]);
+        }
+    }
+}
 
 }

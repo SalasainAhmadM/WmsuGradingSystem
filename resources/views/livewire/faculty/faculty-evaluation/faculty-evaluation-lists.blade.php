@@ -564,7 +564,9 @@
 </td> --}}
 
 @php
-    $total_grade = 0;
+    // DON'T reset $total_grade here - we need it from the earlier calculation!
+    // $total_grade is already calculated above from school work types
+    
     $total_lab_lec_grade = 0;
     $total_lab_lec_grade_average = 0;
     
@@ -581,35 +583,27 @@
 @if($schedule->is_lec)
     <th scope="col" class="">
         @php 
+            // Calculate lecture value based on total and lecture weight
+            $lecture_value = 0;
+            
+            if($total_grade > 0) {
+                // Calculate: Total × (Lecture Weight / 100)
+                // $total_grade is in decimal form (0.60 for 60%)
+                // Multiply by 100 to get percentage, then apply lecture weight
+                $lecture_value = ($total_grade * 100) * ($lecture_weight_percent / 100);
+            }
+            
+            // Check for INC or DROP status
             $lab_lec_grade = DB::table('lab_lec_grades')
                 ->where('schedule_id','=', $detail['schedule_id'])
                 ->where('student_id','=',$value->id)
                 ->first();
-            
-            // Get current term weight
-            $current_term = collect($terms)->firstWhere('id', $detail['term_id']);
-            $term_weight_percent = $current_term ? $current_term->weight : 100;
-            
-            // Calculate scaled lecture grade
-            $scaled_lecture_grade = 0;
-            if($lab_lec_grade != null && floatval($lab_lec_grade->grade)){
-                // Get the actual grade percentage (0-100 scale based on term weight)
-                $actual_grade_percent = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100;
-                
-                // Scale it to 100 based on term weight
-                $scaled_lecture_grade = ($actual_grade_percent / $term_weight_percent) * 10000;
-                
-                // Apply lecture weight to get weighted contribution
-                $weighted_lecture_grade = $scaled_lecture_grade * ($lecture_weight_percent / 100);
-                
-                // Store for weighted average calculation
-                $lecture_component = $scaled_lecture_grade;
-            }
         @endphp
-        @if($lab_lec_grade != null && floatval($lab_lec_grade->grade))
-            {{ number_format($weighted_lecture_grade, 2, '.', '') }}
+        
+        @if($lecture_value > 0)
+            {{ number_format($lecture_value, 2, '.', '') }}
         @else
-            {{$lab_lec_grade ? $lab_lec_grade->other : ""}}    
+            {{ $lab_lec_grade ? $lab_lec_grade->other : "0.00" }}    
         @endif
     </th>
 @endif
@@ -621,30 +615,26 @@
             $current_term = collect($terms)->firstWhere('id', $detail['term_id']);
             $term_type = $current_term ? $current_term->term_name : 'Midterm';
             
-            // For LECTURE schedules, get the laboratory value from lab_values table
+            $laboratory_value = 0;
+            
+            // For LECTURE schedules with lab component
             if($schedule->is_lec == 1) {
                 $lab_value = DB::table('lab_values')
                     ->where('student_id', '=', $value->id)
                     ->where('term_type', '=', $term_type)
                     ->first();
                 
-                $scaled_laboratory_grade = $lab_value ? floatval($lab_value->value_lab) : 0;
-                
-                // Apply laboratory weight to get weighted contribution
-                $weighted_laboratory_grade = $scaled_laboratory_grade * ($laboratory_weight_percent / 100);
-                
-                // Store for weighted average calculation
-                $laboratory_component = $scaled_laboratory_grade;
+                if($lab_value && floatval($lab_value->value_lab)) {
+                    $scaled_laboratory_grade = floatval($lab_value->value_lab);
+                    
+                    // Apply laboratory weight
+                    $laboratory_value = $scaled_laboratory_grade * ($laboratory_weight_percent / 100);
+                    $laboratory_component = $scaled_laboratory_grade;
+                } else {
+                    $laboratory_component = 0;
+                }
             } else {
-                // For LABORATORY schedules, calculate from lab_lec_grades
-                $lab_lec_grade = DB::table('lab_lec_grades')
-                    ->where('schedule_id','=', $detail['schedule_id'])
-                    ->where('student_id','=',$value->id)
-                    ->first();
-                
-                // Get current term weight percentage
-                $term_weight_percent = $current_term ? $current_term->weight : 100;
-                
+                // For pure LABORATORY schedules
                 // Get lab weight for this laboratory schedule
                 $lab_lec_weight_lab = DB::table('lab_lec')
                     ->where('schedule_id','=', $detail['schedule_id'])
@@ -653,38 +643,31 @@
                 
                 $lab_weight_percent = $lab_lec_weight_lab ? floatval($lab_lec_weight_lab->sub_weight) : 100;
                 
-                if($lab_lec_grade != null && floatval($lab_lec_grade->grade)) {
-                    // Calculate the actual grade percentage (0-100 scale)
-                    $actual_lab_grade_percent = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100;
-                    
-                    // Scale it to match the term weight percentage
-                    $scaled_laboratory_grade = ($actual_lab_grade_percent / $term_weight_percent) * 10000;
-                    
-                    // Apply laboratory weight to get weighted contribution
-                    $weighted_laboratory_grade = $scaled_laboratory_grade * ($lab_weight_percent / 100);
-                    
-                    $laboratory_component = $scaled_laboratory_grade;
+                // Simple calculation: Laboratory = Total × (Lab Weight / 100)
+                if($total_grade > 0) {
+                    // $total_grade is in decimal form (0.60 for 60%)
+                    // Multiply by 100 to get percentage, then apply lab weight
+                    $laboratory_value = ($total_grade * 100) * ($lab_weight_percent / 100);
+                    $laboratory_component = ($total_grade * 100); // Store unweighted for potential use
                 } else {
-                    $scaled_laboratory_grade = 0;
-                    $weighted_laboratory_grade = 0;
                     $laboratory_component = 0;
                 }
             }
         @endphp
         
         @if($schedule->is_lec == 1)
-            {{-- For lecture schedules, show weighted value from lab_values table --}}
-            @if($lab_value && floatval($lab_value->value_lab))
-                {{ number_format($weighted_laboratory_grade, 2, '.', '') }}
+            {{-- For lecture schedules with lab component --}}
+            @if($laboratory_value > 0)
+                {{ number_format($laboratory_value, 2, '.', '') }}
             @else
                 0.00
             @endif
         @else
-            {{-- For laboratory schedules, show weighted calculated value --}}
-            @if($weighted_laboratory_grade > 0)
-                {{ number_format($weighted_laboratory_grade, 2, '.', '') }}
+            {{-- For pure laboratory schedules --}}
+            @if($laboratory_value > 0)
+                {{ number_format($laboratory_value, 2, '.', '') }}
             @else
-                {{$lab_lec_grade ? $lab_lec_grade->other : "0.00"}}    
+                0.00
             @endif
         @endif
     </th>
@@ -693,17 +676,18 @@
 @if($schedule->is_lec)
     <th scope="col" class="">
         @php
-            // Calculate weighted average based on schedule type
+            // Calculate weighted average as sum of lecture and laboratory
             $weighted_average = 0;
             
-            if(isset($lecture_component) && isset($laboratory_component)) {
-                $weighted_average = ($lecture_component * ($lecture_weight_percent / 100)) + 
-                                  ($laboratory_component * ($laboratory_weight_percent / 100));
-            } elseif(isset($lecture_component)) {
-                $weighted_average = $lecture_component;
+            if(isset($lecture_value) && isset($laboratory_component)) {
+                // Both components exist
+                $weighted_average = $lecture_value + ($laboratory_component * ($laboratory_weight_percent / 100));
+            } elseif(isset($lecture_value)) {
+                // Only lecture exists
+                $weighted_average = $lecture_value;
             }
             
-            // Check if student should have INC or DROP status
+            // Check for incomplete scores
             $total_school_works = 0;
             $null_score_count = 0;
             
@@ -733,10 +717,10 @@
     </th>
 @else
     @php
-        // For pure laboratory schedules, set weighted_average from laboratory component
-        $weighted_average = isset($laboratory_component) ? $laboratory_component : 0;
+        // For pure laboratory schedules, use the Total column value (total_grade)
+        // Convert from decimal to percentage (total_grade is like 0.69 for 69%)
+        $weighted_average = $total_grade * 100;
         
-        // Check if student should have INC or DROP status
         $total_school_works = 0;
         $null_score_count = 0;
         
