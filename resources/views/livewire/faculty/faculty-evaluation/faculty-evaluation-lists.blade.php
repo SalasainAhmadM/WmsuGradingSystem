@@ -656,16 +656,16 @@
         @endphp
         
         @if($schedule->is_lec == 1)
-            {{-- For lecture schedules with lab component --}}
+            {{-- For lecture schedules with lab component - TRUNCATE to 2 decimals --}}
             @if($laboratory_value > 0)
-                {{ number_format($laboratory_value, 2, '.', '') }}
+                {{ number_format(floor($laboratory_value * 100) / 100, 2, '.', '') }}
             @else
                 0.00
             @endif
         @else
             {{-- For pure laboratory schedules --}}
             @if($laboratory_value > 0)
-                {{ number_format($laboratory_value, 2, '.', '') }}
+                {{ number_format(floor($laboratory_value * 100) / 100, 2, '.', '') }}
             @else
                 0.00
             @endif
