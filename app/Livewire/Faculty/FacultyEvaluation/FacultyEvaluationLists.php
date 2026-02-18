@@ -1089,6 +1089,7 @@ class FacultyEvaluationLists extends Component
 
         self::autoUpdateRemarks();
         self::calculateAndStoreFinalGrade($student_id);
+        $this->js('window.location.reload()');
     }
 
     // public function open_term_weight($modal_id)
