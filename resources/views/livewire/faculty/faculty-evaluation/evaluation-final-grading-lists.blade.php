@@ -140,7 +140,7 @@
                             </div>
         
                         </div>
-                    <thead style="background:#952323;color:white;">
+                   <thead style="background:#952323;color:white;">
                         <tr class="align-middle">
                             <th class="sticky-col left-0"></th>
                             <th class="sticky-col left-1"></th>
@@ -150,189 +150,242 @@
                                     ->where('schedule_id','=',$this->detail['schedule_id'])
                                     ->where('term_id','=',$this->detail['term_id'])
                                     ->first();
+                                
+                                // Get term weights for dynamic headers
+                                $all_terms = DB::table('terms')
+                                    ->where('schedule_id','=',$detail['schedule_id'])
+                                    ->orderBy('term_order', 'asc')
+                                    ->get();
+                                
+                                $midterm_weight = 0;
+                                $finalterm_weight = 0;
+                                
+                                foreach($all_terms as $term) {
+                                    $term_name_lower = strtolower(trim($term->term_name));
+                                    if($term_name_lower === 'midterm') {
+                                        $midterm_weight = floatval($term->weight);
+                                    } elseif($term_name_lower === 'finalterm') {
+                                        $finalterm_weight = floatval($term->weight);
+                                    }
+                                }
                             @endphp
-                            <th colspan="5">
+                            <th colspan="7">
                                 Final Grade
                             </th>
                         </tr>
                         <tr class="align-middle">
                             <th scope="col" class="sticky-col left-0">#</th>
                             <th scope="col" class="sticky-col left-1">Student</th>
-                            @forelse ($school_work_types as $key => $value )
-                                @php
-                                    $school_works_var = DB::table('school_works')
-                                        ->where('school_work_type_id','=',$value->id)
-                                        ->get()
-                                        ->toArray();
-                                @endphp
-                            @empty
-                            @endforelse
-                            @php
-                                $term_total = DB::table('terms')
-                                    ->select(DB::raw('sum(weight) as total'))
-                                    ->where('schedule_id','=',$detail['schedule_id'])
-                                    ->first();
-                            @endphp
-                            @foreach ($terms as $key =>$value )
-                                @if($value->id != $detail['term_id'])
-                                @php 
-                                    $other_term_weight = $value->weight;
-                                @endphp 
-                                @endif
-                            @endforeach
-                            @if($schedule->is_lec)
-                            <th scope="col" class="">Lecture</th>
-                            @endif
-                            @if($schedule->laboratory_unit>0)
-                                <th scope="col" class="">Laboratory</th>
-                            @endif
-                                <th scope="col" class="">Total</th>
-                                <th scope="col" class="">Weighted Grade</th>
-                                <th scope="col" class="">Remarks</th>
+                            <th scope="col" class="">Midterm</th>
+                            <th scope="col" class="">{{ number_format($midterm_weight, 0) }}% </th>
+                            <th scope="col" class="">Finalterm</th>
+                            <th scope="col" class="">{{ number_format($finalterm_weight, 0) }}% </th>
+                            <th scope="col" class="">Total</th>
+                            <th scope="col" class="">Total Computed Grade</th>
+                            <th scope="col" class="">Remarks</th>
                         </tr>
                     </thead>
 
                     <tbody>
-                        @forelse($table_data as $key => $value)
-                            <tr class="align-middle">
-                                <th scope="row" class="px-4">
-                                    {{ ($table_data->currentPage()-1) * $table_data->perPage() + $key + 1 }}
-                                </th>
-                                <td class="text-start">
-                                    <div class="d-flex justify-content-between align-items-center">
-                                        <a href="/faculty/students/view-{{ $value->id }}" target="_blank">
-                                            <span>{{ $value->code.' - '.$value->fullname }}</span>
-                                        </a>
-                                        <a href="/faculty/students/view-{{ $value->id }}/schedule-{{ $detail['schedule_id'] }}/" 
-                                        class="btn btn-outline-secondary" target="_blank">
-                                            <span>
-                                                <svg viewBox="0 0 1024 1024" width="20px" class="icon" version="1.1" xmlns="http://www.w3.org/2000/svg" fill="#000000">
-                                                    <g id="SVGRepo_bgCarrier" stroke-width="0"></g>
-                                                    <g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g>
-                                                    <g id="SVGRepo_iconCarrier">
-                                                        <path d="M981.333333 960h-21.333333V576a21.333333 21.333333 0 0 0-42.666667 0v384h-128V213.333333a42.666667 42.666667 0 0 1 42.666667-42.666666h42.666667a42.666667 42.666667 0 0 1 42.666666 42.666666v21.333334a21.333333 21.333333 0 0 0 42.666667 0v-21.333334a85.333333 85.333333 0 0 0-85.333333-85.333333h-42.666667a85.333333 85.333333 0 0 0-85.333333 85.333333v746.666667h-85.333334V426.666667a85.333333 85.333333 0 0 0-85.333333-85.333334h-42.666667a85.333333 85.333333 0 0 0-85.333333 85.333334v533.333333h-85.333333V640a85.333333 85.333333 0 0 0-85.333334-85.333333h-42.666666a85.333333 85.333333 0 0 0-85.333334 85.333333v320H64V42.666667a21.333333 21.333333 0 0 0-42.666667 0v938.666666a21.333333 21.333333 0 0 0 21.333334 21.333334h938.666666a21.333333 21.333333 0 0 0 0-42.666667z m-661.333333 0H192V640a42.666667 42.666667 0 0 1 42.666667-42.666667h42.666666a42.666667 42.666667 0 0 1 42.666667 42.666667z m298.666667 0h-128V426.666667a42.666667 42.666667 0 0 1 42.666666-42.666667h42.666667a42.666667 42.666667 0 0 1 42.666667 42.666667z" fill="currentColor"></path>
-                                                        <path d="M938.666667 384a21.333333 21.333333 0 0 0-21.333334 21.333333v85.333334a21.333333 21.333333 0 0 0 42.666667 0v-85.333334a21.333333 21.333333 0 0 0-21.333333-21.333333zM958.293333 311.893333a24.533333 24.533333 0 0 0-4.48-7.04l-3.2-2.56a16.213333 16.213333 0 0 0-3.84-1.92L942.933333 298.666667a21.333333 21.333333 0 0 0-12.373333 1.28 19.2 19.2 0 0 0-11.52 11.52 21.333333 21.333333 0 0 0-1.706667 8.533333 21.333333 21.333333 0 0 0 6.186667 15.146667 21.333333 21.333333 0 0 0 7.04 4.48A21.333333 21.333333 0 0 0 938.666667 341.333333a21.333333 21.333333 0 0 0 15.146666-6.186666A22.4 22.4 0 0 0 960 320a21.333333 21.333333 0 0 0-1.706667-8.106667z" fill="currentColor"></path>
-                                                    </g>
-                                                </svg>
-                                            </span>
-                                        </a>
-                                    </div>
-                                </td>
+                    @forelse($table_data as $key => $value)
+                        <tr class="align-middle">
+                            <th scope="row" class="px-4">
+                                {{ ($table_data->currentPage()-1) * $table_data->perPage() + $key + 1 }}
+                            </th>
+                            <td class="text-start">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <a href="/faculty/students/view-{{ $value->id }}" target="_blank">
+                                        <span>{{ $value->code.' - '.$value->fullname }}</span>
+                                    </a>
+                                    <a href="/faculty/students/view-{{ $value->id }}/schedule-{{ $detail['schedule_id'] }}/" 
+                                    class="btn btn-outline-secondary" target="_blank">
+                                        <span>
+                                            <svg viewBox="0 0 1024 1024" width="20px" class="icon" version="1.1" xmlns="http://www.w3.org/2000/svg" fill="#000000">
+                                                <g id="SVGRepo_bgCarrier" stroke-width="0"></g>
+                                                <g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g>
+                                                <g id="SVGRepo_iconCarrier">
+                                                    <path d="M981.333333 960h-21.333333V576a21.333333 21.333333 0 0 0-42.666667 0v384h-128V213.333333a42.666667 42.666667 0 0 1 42.666667-42.666666h42.666667a42.666667 42.666667 0 0 1 42.666666 42.666666v21.333334a21.333333 21.333333 0 0 0 42.666667 0v-21.333334a85.333333 85.333333 0 0 0-85.333333-85.333333h-42.666667a85.333333 85.333333 0 0 0-85.333333 85.333333v746.666667h-85.333334V426.666667a85.333333 85.333333 0 0 0-85.333333-85.333334h-42.666667a85.333333 85.333333 0 0 0-85.333333 85.333334v533.333333h-85.333333V640a85.333333 85.333333 0 0 0-85.333334-85.333333h-42.666666a85.333333 85.333333 0 0 0-85.333334 85.333333v320H64V42.666667a21.333333 21.333333 0 0 0-42.666667 0v938.666666a21.333333 21.333333 0 0 0 21.333334 21.333334h938.666666a21.333333 21.333333 0 0 0 0-42.666667z m-661.333333 0H192V640a42.666667 42.666667 0 0 1 42.666667-42.666667h42.666666a42.666667 42.666667 0 0 1 42.666667 42.666667z m298.666667 0h-128V426.666667a42.666667 42.666667 0 0 1 42.666666-42.666667h42.666667a42.666667 42.666667 0 0 1 42.666667 42.666667z" fill="currentColor"></path>
+                                                    <path d="M938.666667 384a21.333333 21.333333 0 0 0-21.333334 21.333333v85.333334a21.333333 21.333333 0 0 0 42.666667 0v-85.333334a21.333333 21.333333 0 0 0-21.333333-21.333333zM958.293333 311.893333a24.533333 24.533333 0 0 0-4.48-7.04l-3.2-2.56a16.213333 16.213333 0 0 0-3.84-1.92L942.933333 298.666667a21.333333 21.333333 0 0 0-12.373333 1.28 19.2 19.2 0 0 0-11.52 11.52 21.333333 21.333333 0 0 0-1.706667 8.533333 21.333333 21.333333 0 0 0 6.186667 15.146667 21.333333 21.333333 0 0 0 7.04 4.48A21.333333 21.333333 0 0 0 938.666667 341.333333a21.333333 21.333333 0 0 0 15.146666-6.186666A22.4 22.4 0 0 0 960 320a21.333333 21.333333 0 0 0-1.706667-8.106667z" fill="currentColor"></path>
+                                                </g>
+                                            </svg>
+                                        </span>
+                                    </a>
+                                </div>
+                            </td>
+                            
+                            {{-- Get final grades data from the final_grades array --}}
+                            @php
+                                $student_final_grade = isset($final_grades[$value->id]) ? $final_grades[$value->id] : null;
+                                $remarks = $student_final_grade['remarks'] ?? 'N/A';
                                 
-                                {{-- Get final grades data from the final_grades array --}}
+                                // Get term weights
+                                $all_terms_for_calc = DB::table('terms')
+                                    ->where('schedule_id', '=', $detail['schedule_id'])
+                                    ->orderBy('term_order', 'asc')
+                                    ->get();
+                                
+                                $midterm_weight_calc = 0;
+                                $finalterm_weight_calc = 0;
+                                
+                                foreach($all_terms_for_calc as $term) {
+                                    $term_name_lower = strtolower(trim($term->term_name));
+                                    if($term_name_lower === 'midterm') {
+                                        $midterm_weight_calc = floatval($term->weight);
+                                    } elseif($term_name_lower === 'finalterm') {
+                                        $finalterm_weight_calc = floatval($term->weight);
+                                    }
+                                }
+                                
+                                // Initialize calculation variables
+                                $midterm_value = null;
+                                $midterm_weighted = null;
+                                $finalterm_value = null;
+                                $finalterm_weighted = null;
+                                $total_value = null;
+                                $computed_grade = null;
+                            @endphp
+                            
+                            {{-- Only show values if status is PASSED or if there are actual grades --}}
+                            @if($remarks === 'INC' || $remarks === 'DROP')
+                                {{-- Midterm - Empty for INC/DROP --}}
+                                <td class="text-center">
+                                    <span class="text-muted">--</span>
+                                </td>
+                                {{-- Midterm Weighted - Empty for INC/DROP --}}
+                                <td class="text-center">
+                                    <span class="text-muted">--</span>
+                                </td>
+                                {{-- Finalterm - Empty for INC/DROP --}}
+                                <td class="text-center">
+                                    <span class="text-muted">--</span>
+                                </td>
+                                {{-- Finalterm Weighted - Empty for INC/DROP --}}
+                                <td class="text-center">
+                                    <span class="text-muted">--</span>
+                                </td>
+                                {{-- Total - Empty for INC/DROP --}}
+                                <td class="text-center" style="background-color: #FFF3CD; font-weight: bold;">
+                                    <span class="text-muted">--</span>
+                                </td>
+                                {{-- Total Computed Grade - Empty for INC/DROP --}}
+                                <td class="text-center">
+                                    <span class="text-muted">--</span>
+                                </td>
+                            @else
                                 @php
-                                    $student_final_grade = isset($final_grades[$value->id]) ? $final_grades[$value->id] : null;
-                                    
-                                    // Get the lab/lec weight for calculating weighted contributions
-                                    // Get average of all terms' lab_lec weights
-                                    $all_terms_lab_lec = DB::table('lab_lec')
-                                        ->where('schedule_id', '=', $detail['schedule_id'])
-                                        ->get();
-                                    
-                                    $total_lecture_weight = 0;
-                                    $total_lab_weight = 0;
-                                    $term_count = 0;
-                                    
-                                    foreach($all_terms_lab_lec as $term_lab_lec) {
-                                        $total_lecture_weight += floatval($term_lab_lec->sub_weight);
-                                        $term_count++;
+                                    // Calculate values for PASSED/FAILED
+                                    if($student_final_grade && isset($student_final_grade['midterm_grades']) && $student_final_grade['midterm_grades'] !== null) {
+                                        $midterm_value = floatval($student_final_grade['midterm_grades']);
+                                        // Calculate weighted value: midterm_value * (weight / 100)
+                                        $midterm_weighted = $midterm_value * ($midterm_weight_calc / 100);
                                     }
                                     
-                                    $avg_lecture_weight_percent = $term_count > 0 ? $total_lecture_weight / $term_count : 50;
-                                    $avg_lab_weight_percent = 100 - $avg_lecture_weight_percent;
+                                    if($student_final_grade && isset($student_final_grade['finalterm_grades']) && $student_final_grade['finalterm_grades'] !== null) {
+                                        $finalterm_value = floatval($student_final_grade['finalterm_grades']);
+                                        // Calculate weighted value: finalterm_value * (weight / 100)
+                                        $finalterm_weighted = $finalterm_value * ($finalterm_weight_calc / 100);
+                                    }
+                                    
+                                    // Calculate total as sum of weighted values
+                                    if($midterm_weighted !== null && $finalterm_weighted !== null) {
+                                        $total_value = $midterm_weighted + $finalterm_weighted;
+                                    } elseif($midterm_weighted !== null) {
+                                        $total_value = $midterm_weighted;
+                                    } elseif($finalterm_weighted !== null) {
+                                        $total_value = $finalterm_weighted;
+                                    }
+                                    
+                                    // Get grade equivalent based on total value
+                                    if($total_value !== null) {
+                                        foreach($point_grade_equivalent as $p_value) {
+                                            if($total_value >= $p_value->minimum && $total_value < $p_value->maximum + 1) {
+                                                $computed_grade = floatval($p_value->grade);
+                                                break;
+                                            }
+                                        }
+                                    }
                                 @endphp
                                 
-                                {{-- Lecture Grade (Weighted) --}}
-                                @if($schedule->is_lec)
-                                    <td class="text-center">
-                                        @if($student_final_grade && $student_final_grade['lecture_grade'] !== null)
-                                            @php
-                                                // Apply lecture weight percentage
-                                                $weighted_lecture = $student_final_grade['lecture_grade'] * ($avg_lecture_weight_percent / 100);
-                                            @endphp
-                                            {{ number_format($weighted_lecture, 2, '.', '') }}
-                                        @else
-                                            <span class="text-muted">--</span>
-                                        @endif
-                                    </td>
-                                @endif
+                                {{-- Midterm Grade --}}
+                                <td class="text-center">
+                                    @if($midterm_value !== null)
+                                        {{ number_format($midterm_value, 2, '.', '') }}
+                                    @else
+                                        <span class="text-muted">--</span>
+                                    @endif
+                                </td>
                                 
-                                {{-- Laboratory Grade (Weighted) --}}
-                                @if($schedule->laboratory_unit > 0 || $schedule->is_lec == 0)
-                                    <td class="text-center">
-                                        @if($student_final_grade && $student_final_grade['laboratory_grade'] !== null)
-                                            @php
-                                                // Apply laboratory weight percentage
-                                                $weighted_laboratory = $student_final_grade['laboratory_grade'] * ($avg_lab_weight_percent / 100);
-                                            @endphp
-                                            {{ number_format($weighted_laboratory, 2, '.', '') }}
-                                        @else
-                                            <span class="text-muted">--</span>
-                                        @endif
-                                    </td>
-                                @endif
+                                {{-- Midterm Weighted (Avg based on term weight) --}}
+                                <td class="text-center">
+                                    @if($midterm_weighted !== null)
+                                        {{ number_format($midterm_weighted, 2, '.', '') }}
+                                    @else
+                                        <span class="text-muted">--</span>
+                                    @endif
+                                </td>
                                 
-                                {{-- Total Grade (Weighted Average) --}}
+                                {{-- Finalterm Grade --}}
+                                <td class="text-center">
+                                    @if($finalterm_value !== null)
+                                        {{ number_format($finalterm_value, 2, '.', '') }}
+                                    @else
+                                        <span class="text-muted">--</span>
+                                    @endif
+                                </td>
+                                
+                                {{-- Finalterm Weighted (Avg based on term weight) --}}
+                                <td class="text-center">
+                                    @if($finalterm_weighted !== null)
+                                        {{ number_format($finalterm_weighted, 2, '.', '') }}
+                                    @else
+                                        <span class="text-muted">--</span>
+                                    @endif
+                                </td>
+                                
+                                {{-- Total (Sum of weighted averages) --}}
                                 <td class="text-center" style="background-color: #FFF3CD; font-weight: bold;">
-                                    @if($student_final_grade && $student_final_grade['total_grade'] !== null)
-                                        @php
-                                            // Calculate weighted total
-                                            $weighted_total = 0;
-                                            
-                                            if($schedule->is_lec && $student_final_grade['lecture_grade'] !== null && $student_final_grade['laboratory_grade'] !== null) {
-                                                // Both lecture and lab exist
-                                                $weighted_total = ($student_final_grade['lecture_grade'] * ($avg_lecture_weight_percent / 100)) + 
-                                                                ($student_final_grade['laboratory_grade'] * ($avg_lab_weight_percent / 100));
-                                            } elseif($schedule->is_lec && $student_final_grade['lecture_grade'] !== null) {
-                                                // Lecture only
-                                                $weighted_total = $student_final_grade['lecture_grade'];
-                                            } elseif($student_final_grade['laboratory_grade'] !== null) {
-                                                // Laboratory only
-                                                $weighted_total = $student_final_grade['laboratory_grade'];
-                                            }
-                                        @endphp
-                                        {{ number_format($weighted_total, 2, '.', '') }}
+                                    @if($total_value !== null)
+                                        {{ number_format($total_value, 2, '.', '') }}
                                     @else
                                         <span class="text-muted">--</span>
                                     @endif
                                 </td>
                                 
-                                {{-- Weighted Grade --}}
+                                {{-- Total Computed Grade (Grade equivalent) --}}
                                 <td class="text-center">
-                                    @if($student_final_grade && $student_final_grade['weighted_grade'] !== null)
-                                        {{ number_format($student_final_grade['weighted_grade'], 2, '.', '') }}
+                                    @if($computed_grade !== null)
+                                        {{ number_format($computed_grade, 2, '.', '') }}
                                     @else
                                         <span class="text-muted">--</span>
                                     @endif
                                 </td>
+                            @endif
 
-                                {{-- Remarks --}}
-                                <td class="text-center">
-                                    @php
-                                        $remarks = $student_final_grade['remarks'] ?? 'N/A';
-                                        
-                                        $badge_class = match($remarks) {
-                                            'PASSED' => 'bg-success',
-                                            'FAILED' => 'bg-danger',
-                                            'INC' => 'bg-warning',
-                                            'DROP' => 'bg-secondary',
-                                            default => 'bg-light'
-                                        };
-                                    @endphp
-                                    <span class="badge-remarks {{ $badge_class }}">
-                                        {{ $remarks }}
-                                    </span>
-                                </td>
-                            </tr>
-                        @empty
-                            <tr class="align-middle">
-                                <td colspan="20">
-                                    <div class="alert alert-danger d-flex justify-content-center">
-                                        No records found!
-                                    </div>
-                                </td>
-                            </tr>
-                        @endforelse
+                            {{-- Remarks --}}
+                            <td class="text-center">
+                                @php
+                                    $badge_class = match($remarks) {
+                                        'PASSED' => 'bg-success',
+                                        'FAILED' => 'bg-danger',
+                                        'INC' => 'bg-warning',
+                                        'DROP' => 'bg-secondary',
+                                        default => 'bg-light'
+                                    };
+                                @endphp
+                                <span class="badge-remarks {{ $badge_class }}">
+                                    {{ $remarks }}
+                                </span>
+                            </td>
+                        </tr>
+                    @empty
+                        <tr class="align-middle">
+                            <td colspan="20">
+                                <div class="alert alert-danger d-flex justify-content-center">
+                                    No records found!
+                                </div>
+                            </td>
+                        </tr>
+                    @endforelse
                     </tbody>
                 </table>
             </div>

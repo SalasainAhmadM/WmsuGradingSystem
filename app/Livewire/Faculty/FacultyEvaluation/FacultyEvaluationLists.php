@@ -1398,6 +1398,10 @@ class FacultyEvaluationLists extends Component
     {
         $total_lecture_grade = 0;
         $term_count = 0;
+        
+        // Variables to store individual term weighted totals (from red square area)
+        $midterm_grade_value = null;
+        $finalterm_grade_value = null;
 
         // Get all terms for this schedule
         $all_terms = DB::table('terms')
@@ -1408,32 +1412,91 @@ class FacultyEvaluationLists extends Component
         // Track if we have any valid grades
         $has_any_grades = false;
 
-        // For each term, calculate the lecture grade values
+        // For each term, calculate the weighted total (Lecture + Laboratory)
         foreach ($all_terms as $term) {
-            // Check if student has INC or DROP for this specific term
+            // Get the term grade (this is the "Total" column value from green square)
             $term_grade = DB::table('term_grades')
                 ->where('schedule_id', '=', $this->detail['schedule_id'])
                 ->where('student_id', '=', $student_id)
                 ->where('term_id', '=', $term->id)
                 ->first();
 
+            $term_lecture_value = null;
+            $term_laboratory_value = null;
+            $term_weighted_total = null;
+            
+            // Get lab/lec weight for this term
+            $lab_lec_weight_term = DB::table('lab_lec')
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->where('term_id', '=', $term->id)
+                ->first();
+            
+            $term_lecture_weight_percent = $lab_lec_weight_term ? floatval($lab_lec_weight_term->sub_weight) : 80;
+            $term_laboratory_weight_percent = 100 - $term_lecture_weight_percent;
+            
             // Track this term for counting
             $term_has_data = false;
 
-            // Calculate the LECTURE value for THIS TERM (if applicable)
-            if ($this->schedule && $this->schedule->is_lec) {
-                if ($term_grade && floatval($term_grade->grade)) {
-                    // Get current term weight
-                    $term_weight_percent = $term->weight;
-
-                    // Calculate the actual grade for this term (0-100 scale)
-                    $term_lecture_value = ($term_grade->grade / ($term_weight_percent / 100)) * 100;
-
-                    // Add to cumulative total
-                    $total_lecture_grade += $term_lecture_value;
-                    $term_has_data = true;
-                    $has_any_grades = true;
+            if ($term_grade && floatval($term_grade->grade)) {
+                $term_weight_percent = $term->weight;
+                
+                // Convert grade back to 0-100 scale (this is the "Total" column value - green square)
+                $term_total_value = ($term_grade->grade / ($term_weight_percent / 100)) * 100;
+                
+                // Calculate Lecture value for this term (if applicable)
+                if ($this->schedule && $this->schedule->is_lec) {
+                    // Lecture = Total × (Lecture Weight / 100)
+                    $term_lecture_value = $term_total_value * ($term_lecture_weight_percent / 100);
+                    
+                    // Add to cumulative for final lecture grade calculation
+                    $total_lecture_grade += $term_total_value;
                 }
+                
+                // Calculate Laboratory value for this term (if applicable)
+                if ($this->schedule && ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0)) {
+                    $term_type = $term->term_name;
+                    
+                    if ($this->schedule->is_lec == 1) {
+                        // For lecture schedules with lab component, get from lab_values
+                        $lab_value_term = DB::table('lab_values')
+                            ->where('student_id', '=', $student_id)
+                            ->where('term_type', '=', $term_type)
+                            ->first();
+                        
+                        if ($lab_value_term && floatval($lab_value_term->value_lab)) {
+                            $scaled_laboratory_grade = floatval($lab_value_term->value_lab);
+                            // Laboratory = Scaled Lab Grade × (Lab Weight / 100)
+                            $term_laboratory_value = $scaled_laboratory_grade * ($term_laboratory_weight_percent / 100);
+                        }
+                    } else {
+                        // For pure laboratory schedules, Laboratory = Total × (Lab Weight / 100)
+                        $term_laboratory_value = $term_total_value * ($term_laboratory_weight_percent / 100);
+                    }
+                }
+                
+                // Calculate weighted total for this term (the red square value)
+                if ($this->schedule && $this->schedule->is_lec) {
+                    // For lecture schedules, sum of lecture and laboratory
+                    if ($term_lecture_value !== null && $term_laboratory_value !== null) {
+                        $term_weighted_total = $term_lecture_value + $term_laboratory_value;
+                    } elseif ($term_lecture_value !== null) {
+                        $term_weighted_total = $term_lecture_value;
+                    }
+                } else {
+                    // For pure lab schedules, just use the laboratory value
+                    $term_weighted_total = $term_laboratory_value;
+                }
+                
+                // Store based on term name
+                $term_name_lower = strtolower(trim($term->term_name));
+                if ($term_name_lower === 'midterm') {
+                    $midterm_grade_value = $term_weighted_total;
+                } elseif ($term_name_lower === 'finalterm') {
+                    $finalterm_grade_value = $term_weighted_total;
+                }
+                
+                $has_any_grades = true;
+                $term_has_data = true;
             }
 
             // Only count this term if it had valid data
@@ -1483,7 +1546,7 @@ class FacultyEvaluationLists extends Component
                 $lab_count++;
             }
 
-            // Calculate average and scale down (from 10000 scale to 100 scale)
+            // Calculate average
             if ($lab_count > 0) {
                 $final_laboratory_value = (($midterm_value + $finalterm_value) / $lab_count);
                 $has_any_grades = true;
@@ -1615,6 +1678,8 @@ class FacultyEvaluationLists extends Component
                 ->update([
                     'lecture_grade' => $final_lecture_value,
                     'laboratory_grade' => $final_laboratory_value,
+                    'midterm_grades' => $midterm_grade_value, // Now stores weighted total (Lecture + Lab)
+                    'finalterm_grades' => $finalterm_grade_value, // Now stores weighted total (Lecture + Lab)
                     'total_grade' => $total_grade,
                     'weighted_grade' => $weighted_grade,
                     'remarks' => $remarks,
@@ -1627,6 +1692,8 @@ class FacultyEvaluationLists extends Component
                     'student_id' => $student_id,
                     'lecture_grade' => $final_lecture_value,
                     'laboratory_grade' => $final_laboratory_value,
+                    'midterm_grades' => $midterm_grade_value, // Now stores weighted total (Lecture + Lab)
+                    'finalterm_grades' => $finalterm_grade_value, // Now stores weighted total (Lecture + Lab)
                     'total_grade' => $total_grade,
                     'weighted_grade' => $weighted_grade,
                     'remarks' => $remarks,
