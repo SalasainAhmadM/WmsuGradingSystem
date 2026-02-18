@@ -691,7 +691,7 @@
                                 </div>
                             @foreach ($laboratory_schedules as $key => $value )
                                 <div class="col-md-12 mb-3">
-                                    <label for="weight" class="form-label">{{ $value->fullname }}  : {{ $value->schedule_from  }} - {{ $value->schedule_to }}</label>
+                                    <label for="weight" class="form-label">Lab Weight</label>
                                     <input type="number" min="1" step="0.1" id="weight" wire:model="laboratory_schedules_weight.{{ $key }}.weight" placeholder="Laboratory Weight" 
                                         class="form-control @error('term_weight.weight') is-invalid @enderror">
                                     @error('temp_terms.weight')

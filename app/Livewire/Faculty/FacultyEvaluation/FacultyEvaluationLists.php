@@ -109,7 +109,8 @@ class FacultyEvaluationLists extends Component
     public $laboratory_terms = [];
     public $laboratory_schedules_weight = [];
 
-    public $lecture_weight = NULL;
+    public $lecture_weights = [];
+    public $lecture_weight  = NULL;
 
     public $point_grade_equivalent = [];
     public $filters = [
@@ -701,74 +702,83 @@ class FacultyEvaluationLists extends Component
 
     public function getLabLectureWeight()
     {
-        $lecture_schedules = DB::table('schedulings as cl')
-            ->select(
-                DB::raw('CONCAT_WS(" ", u.first_name, u.middle_name, u.last_name, u.suffix) AS fullname'),
-                DB::raw("DATE_FORMAT(sh.schedule_from, '%h:%i %p') as schedule_from"),
-                DB::raw("DATE_FORMAT(sh.schedule_to, '%h:%i %p') as schedule_to"),
-                'sh.day',
-                DB::raw('sum(ll.sub_weight) as sum'),
-                DB::raw('sum(ll.sub_weight)/count(*) as ave'),
-                DB::raw('count(*) as count'),
-                'cl.id'
-            )
-            ->join('schedules as sh', 'cl.schedule_id', 'sh.id')
-            ->join('subjects as s', 'sh.subject_id', 's.id')
-            ->where('cl.id', '=', $this->detail['schedule_id'])
-            ->join('lab_lec as ll', 'll.schedule_id', 'cl.id')
-            ->join('faculty as f', 'cl.faculty_id', 'f.id')
-            ->leftJoin('users as u', 'u.id', 'f.user_id')
-            ->groupBy(
-                'u.first_name',
-                'u.middle_name',
-                'u.last_name',
-                'u.suffix',
-                'sh.day',
-                'sh.schedule_from',
-                'sh.schedule_to',
-                'cl.id'
-            )
-            ->get()
-            ->first();
+        $terms = DB::table('terms')
+            ->where('schedule_id', '=', $this->detail['schedule_id'])
+            ->orderBy('term_order', 'asc')
+            ->get();
 
-        $this->lecture_weight = $lecture_schedules->ave;
+        $this->lecture_weights = [];
+        foreach ($terms as $term) {
+            $ll = DB::table('lab_lec')
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->where('term_id',    '=', $term->id)
+                ->first();
+
+            $this->lecture_weights[] = [
+                'term_id'   => $term->id,
+                'term_name' => $term->term_name,
+                'weight'    => $ll ? floatval($ll->sub_weight) : 50.0,
+            ];
+        }
+
+        $current = collect($this->lecture_weights)
+            ->firstWhere('term_id', $this->detail['term_id']);
+        $this->lecture_weight = $current ? $current['weight'] : 50.0;
+
         self::getlaboratory_schedules();
-
         $this->laboratory_schedules = (array) $this->laboratory_schedules;
 
         $this->laboratory_schedules_weight = [];
-        foreach ($this->laboratory_schedules as $key => $value) {
-            array_push(
-                $this->laboratory_schedules_weight,
-                [
-                    'weight' => $value->ave,
-                    'id' => $value->id
-                ]
-            );
+        foreach ($this->laboratory_schedules as $lab) {
+            $lab_terms = DB::table('terms')
+                ->where('schedule_id', '=', $lab->id)
+                ->orderBy('term_order', 'asc')
+                ->get();
+
+            $term_weights = [];
+            foreach ($lab_terms as $lt) {
+                $ll = DB::table('lab_lec')
+                    ->where('schedule_id', '=', $lab->id)
+                    ->where('term_id',    '=', $lt->id)
+                    ->first();
+
+                $term_weights[] = [
+                    'term_id'   => $lt->id,
+                    'term_name' => $lt->term_name,
+                    'weight'    => $ll ? floatval($ll->sub_weight) : 50.0,
+                ];
+            }
+
+            $this->laboratory_schedules_weight[] = [
+                'id'           => $lab->id,
+                'term_weights' => $term_weights,
+            ];
         }
     }
 
     public function updateLabWeight($modal_id)
     {
-
-        DB::table('lab_lec')
-            ->where('schedule_id', '=', $this->detail['schedule_id'])
-            ->update([
-                'sub_weight' => $this->lecture_weight
-            ]);
-
-        foreach ($this->laboratory_schedules_weight as $key => $value) {
+        foreach ($this->lecture_weights as $lw) {
             DB::table('lab_lec')
-                ->where('schedule_id', '=', $value['id'])
-                ->update([
-                    'sub_weight' => $value['weight']
-                ]);
+                ->where('schedule_id', '=', $this->detail['schedule_id'])
+                ->where('term_id',    '=', $lw['term_id'])
+                ->update(['sub_weight' => $lw['weight']]);
         }
-        $this->dispatch(
-            'notifySuccess',
-            'Updated successfully!',
-            ''
-        );
+
+        foreach ($this->laboratory_schedules_weight as $lab) {
+            foreach ($lab['term_weights'] as $tw) {
+                DB::table('lab_lec')
+                    ->where('schedule_id', '=', $lab['id'])
+                    ->where('term_id',    '=', $tw['term_id'])
+                    ->update(['sub_weight' => $tw['weight']]);
+            }
+        }
+
+        $current = collect($this->lecture_weights)
+            ->firstWhere('term_id', $this->detail['term_id']);
+        $this->lecture_weight = $current ? $current['weight'] : 50.0;
+
+        $this->dispatch('notifySuccess', 'Updated successfully!', '');
         $this->dispatch('closeModal', modal_id: $modal_id);
         self::updateFinalGrades();
     }

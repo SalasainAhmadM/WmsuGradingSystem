@@ -1122,26 +1122,51 @@
                             <h1 class="modal-title fs-5" id="weightModalTitle">Lab Lec Weight</h1>
                             <button type="button" class="btn-close" data-bs-dismiss="modal" id="weightModalclose" aria-label="Close"></button>
                         </div>
-                        <div class="modal-body row">
-                             <div class="col-md-12 mb-3">
-                                    <label for="weight" class="form-label">Lecture Weight</label>
-                                    <input type="number" min="1" step="0.1" id="weight" wire:model="lecture_weight" placeholder="Lecture Weight" 
-                                        class="form-control @error('term_weight.weight') is-invalid @enderror">
-                                    @error('temp_terms.weight')
-                                        <div class="invalid-feedback">{{ $message }}</div>
-                                    @enderror
-                                </div>
-                            @foreach ($laboratory_schedules as $key => $value )
-                                <div class="col-md-12 mb-3">
-                                    <label for="weight" class="form-label">{{ $value->fullname }}  : {{ $value->schedule_from  }} - {{ $value->schedule_to }}</label>
-                                    <input type="number" min="1" step="0.1" id="weight" wire:model="laboratory_schedules_weight.{{ $key }}.weight" placeholder="Laboratory Weight" 
-                                        class="form-control @error('term_weight.weight') is-invalid @enderror">
-                                    @error('temp_terms.weight')
-                                        <div class="invalid-feedback">{{ $message }}</div>
-                                    @enderror
-                                </div>
-                            @endforeach
-                        </div>
+                        
+<div class="modal-body row">
+
+    {{-- ── Lecture weights (one input per term) ── --}}
+    <h6 class="col-12 fw-bold mb-2">Lecture Weights</h6>
+    @foreach ($lecture_weights as $lw_key => $lw)
+        <div class="col-md-6 mb-3">
+            <label class="form-label">
+                Lecture Weight
+                <span class="badge bg-secondary ms-1">{{ $lw['term_name'] }}</span>
+            </label>
+            <input type="number" min="1" max="100" step="0.1"
+                   wire:model="lecture_weights.{{ $lw_key }}.weight"
+                   placeholder="Lecture Weight"
+                   class="form-control @error('lecture_weights.'.$lw_key.'.weight') is-invalid @enderror">
+            @error('lecture_weights.'.$lw_key.'.weight')
+                <div class="invalid-feedback">{{ $message }}</div>
+            @enderror
+        </div>
+    @endforeach
+
+    {{-- ── Laboratory weights (one input per lab schedule × term) ── --}}
+    @if(count($laboratory_schedules_weight))
+        <hr class="col-12">
+        <h6 class="col-12 fw-bold mb-2">Lab Weights</h6>
+        @foreach ($laboratory_schedules_weight as $ls_key => $ls)
+            @foreach ($ls['term_weights'] as $tw_key => $tw)
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">
+                        Lab Weight
+                        <span class="badge bg-secondary ms-1">{{ $tw['term_name'] }}</span>
+                    </label>
+                    <input type="number" min="1" max="100" step="0.1"
+                           wire:model="laboratory_schedules_weight.{{ $ls_key }}.term_weights.{{ $tw_key }}.weight"
+                           placeholder="Laboratory Weight"
+                           class="form-control @error('laboratory_schedules_weight.'.$ls_key.'.term_weights.'.$tw_key.'.weight') is-invalid @enderror">
+                    @error('laboratory_schedules_weight.'.$ls_key.'.term_weights.'.$tw_key.'.weight')
+                        <div class="invalid-feedback">{{ $message }}</div>
+                    @enderror
+                </div>
+            @endforeach
+        @endforeach
+    @endif
+
+</div>
                         <div class="modal-footer">
                             <button class="btn btn-success">
                                 Save
