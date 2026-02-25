@@ -1373,239 +1373,233 @@ class EvaluationFinalGradingLists extends Component
     return response()->stream($callback, 200, $headers);
 }
 
-public function exportExcel()
-{
-    // Get all students for this schedule
-    $students = DB::table('enrolled_students as es')
-        ->select(
-            's.id',
-            's.code',
-            DB::raw('CONCAT_WS(" ", s.first_name, s.middle_name, s.last_name, s.suffix) AS fullname'),
-            'c.name as college',
-            'd.name as department',
-            'yl.year_level'
-        )
-        ->leftJoin('students as s', 's.id', 'es.student_id')
-        ->leftJoin('colleges as c', 'c.id', 's.college_id')
-        ->leftJoin('departments as d', 'd.id', 's.department_id')
-        ->leftJoin('year_levels as yl', 'yl.id', 's.year_level_id')
-        ->where('es.schedule_id', '=', $this->detail['schedule_id'])
-        ->orderBy('s.is_active', 'desc')
-        ->orderBy('s.id', 'desc')
-        ->get();
+    public function exportExcel()
+    {
+        $students = DB::table('enrolled_students as es')
+            ->select(
+                's.id', 's.code',
+                DB::raw('CONCAT_WS(" ", s.first_name, s.middle_name, s.last_name, s.suffix) AS fullname'),
+                'c.name as college', 'd.name as department', 'yl.year_level'
+            )
+            ->leftJoin('students as s', 's.id', 'es.student_id')
+            ->leftJoin('colleges as c', 'c.id', 's.college_id')
+            ->leftJoin('departments as d', 'd.id', 's.department_id')
+            ->leftJoin('year_levels as yl', 'yl.id', 's.year_level_id')
+            ->where('es.schedule_id', '=', $this->detail['schedule_id'])
+            ->orderBy('s.is_active', 'desc')->orderBy('s.id', 'desc')
+            ->get();
 
-    // Apply filters if set
-    if (!empty($this->filters['search'])) {
-        $students = $students->filter(function ($student) {
-            return stripos($student->code, $this->filters['search']) !== false ||
-                stripos($student->fullname, $this->filters['search']) !== false;
-        });
-    }
-
-    if (!empty($this->filters['remarks'])) {
-        $student_ids = DB::table('final_grades')
-            ->where('schedule_id', '=', $this->detail['schedule_id'])
-            ->where('remarks', '=', $this->filters['remarks'])
-            ->pluck('student_id')
-            ->toArray();
-
-        $students = $students->whereIn('id', $student_ids);
-    }
-
-    // Get term weights
-    $all_terms = DB::table('terms')
-        ->where('schedule_id', '=', $this->detail['schedule_id'])
-        ->orderBy('term_order', 'asc')
-        ->get();
-
-    $midterm_weight = 0;
-    $finalterm_weight = 0;
-
-    foreach ($all_terms as $term) {
-        $term_name_lower = strtolower(trim($term->term_name));
-        if ($term_name_lower === 'midterm') {
-            $midterm_weight = floatval($term->weight);
-        } elseif ($term_name_lower === 'finalterm') {
-            $finalterm_weight = floatval($term->weight);
+        if (!empty($this->filters['search'])) {
+            $students = $students->filter(fn($s) =>
+                stripos($s->code, $this->filters['search']) !== false ||
+                stripos($s->fullname, $this->filters['search']) !== false
+            );
         }
-    }
-
-    // Create Excel content
-    $filename = 'final_grades_' . $this->school_year . '_' . $this->semester . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.xls';
-
-    $headers = [
-        'Content-Type' => 'application/vnd.ms-excel',
-        'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-        'Pragma' => 'no-cache',
-        'Cache-Control' => 'must-revalidate, post-check=0, pre-check=0',
-        'Expires' => '0',
-    ];
-
-    $callback = function () use ($students, $midterm_weight, $finalterm_weight) {
-        echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
-        echo '<head>';
-        echo '<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">';
-        echo '<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>';
-        echo '<x:Name>Final Grades</x:Name>';
-        echo '<x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet>';
-        echo '</x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->';
-        echo '<style>';
-        echo 'table { border-collapse: collapse; width: 100%; }';
-        echo 'th, td { border: 1px solid black; padding: 8px; text-align: left; }';
-        echo 'th { background-color: #952323; color: white; font-weight: bold; }';
-        echo '.text-center { text-align: center; }';
-        echo '.bg-highlight { background-color: #FFF3CD; font-weight: bold; }';
-        echo '</style>';
-        echo '</head><body>';
-
-        // Add title and schedule info
-        echo '<h2>Final Grades Report</h2>';
-        echo '<p><strong>School Year:</strong> ' . htmlspecialchars($this->school_year) . '</p>';
-        echo '<p><strong>Semester:</strong> ' . htmlspecialchars($this->semester) . '</p>';
-        if ($this->schedule) {
-            echo '<p><strong>Subject:</strong> ' . htmlspecialchars($this->schedule->subject) . '</p>';
-            echo '<p><strong>Faculty:</strong> ' . htmlspecialchars($this->schedule->faculty_fullname) . '</p>';
+        if (!empty($this->filters['remarks'])) {
+            $ids = DB::table('final_grades')
+                ->where('schedule_id', $this->detail['schedule_id'])
+                ->where('remarks', $this->filters['remarks'])
+                ->pluck('student_id')->toArray();
+            $students = $students->whereIn('id', $ids);
         }
-        echo '<p><strong>Term Weights:</strong> Midterm ' . number_format($midterm_weight, 0) . '% / Finalterm ' . number_format($finalterm_weight, 0) . '%</p>';
-        echo '<br>';
 
-        echo '<table>';
+        [$midterm_weight, $finalterm_weight] = $this->getTermWeights();
 
-        // Header row
-        echo '<thead><tr>';
-        echo '<th>#</th>';
-        echo '<th>Student Code</th>';
-        echo '<th>Student Name</th>';
-        echo '<th>College</th>';
-        echo '<th>Department</th>';
-        echo '<th>Year Level</th>';
-        echo '<th>Midterm</th>';
-        echo '<th>Avg ' . number_format($midterm_weight, 0) . '% (base on the Term weight)</th>';
-        echo '<th>Finalterm</th>';
-        echo '<th>Avg ' . number_format($finalterm_weight, 0) . '% (base on the Term weight)</th>';
-        echo '<th>Total</th>';
-        echo '<th>Total Computed Grade</th>';
-        echo '<th>Remarks</th>';
-        echo '</tr></thead><tbody>';
+        $filename = 'final_grades_' . $this->school_year . '_' . $this->semester
+            . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.xls';
 
-        // Data rows
-        $counter = 1;
-        foreach ($students as $student) {
-            $final_grade = DB::table('final_grades')
-                ->where('schedule_id', '=', $this->detail['schedule_id'])
-                ->where('student_id', '=', $student->id)
-                ->first();
+        return response()->stream(function () use ($students, $midterm_weight, $finalterm_weight) {
+            echo '<html xmlns:o="urn:schemas-microsoft-com:office:office"
+                    xmlns:x="urn:schemas-microsoft-com:office:excel"
+                    xmlns="http://www.w3.org/TR/REC-html40">';
+            echo '<head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">';
+            echo '<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>';
+            echo '<x:Name>Final Grades</x:Name>';
+            echo '<x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>';
+            echo '</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->';
+            echo '<style>';
+            echo 'table{border-collapse:collapse;width:100%}';
+            echo 'th,td{border:1px solid black;padding:8px;text-align:left}';
+            echo 'th{background-color:#952323;color:white;font-weight:bold}';
+            echo '.text-center{text-align:center}';
+            echo '.bg-highlight{background-color:#FFF3CD;font-weight:bold}';
+            echo '</style></head><body>';
 
-            echo '<tr>';
-            echo '<td class="text-center">' . $counter++ . '</td>';
-            echo '<td>' . htmlspecialchars($student->code) . '</td>';
-            echo '<td>' . htmlspecialchars($student->fullname) . '</td>';
-            echo '<td>' . htmlspecialchars($student->college ?? 'N/A') . '</td>';
-            echo '<td>' . htmlspecialchars($student->department ?? 'N/A') . '</td>';
-            echo '<td>' . htmlspecialchars($student->year_level ?? 'N/A') . '</td>';
+            echo $this->excelHeaderBanner();
 
-            $remarks = $final_grade && $final_grade->remarks ? $final_grade->remarks : 'N/A';
+            echo '<h2>Final Grades Report</h2>';
+            echo '<p><strong>School Year:</strong> ' . e($this->school_year) . '</p>';
+            echo '<p><strong>Semester:</strong> ' . e($this->semester) . '</p>';
+            if ($this->schedule) {
+                echo '<p><strong>Subject:</strong> ' . e($this->schedule->subject) . '</p>';
+                echo '<p><strong>Faculty:</strong> ' . e($this->schedule->faculty_fullname) . '</p>';
+            }
+            echo '<p><strong>Term Weights:</strong> Midterm ' . number_format($midterm_weight, 0)
+                . '% / Finalterm ' . number_format($finalterm_weight, 0) . '%</p><br>';
 
-            // Check if INC or DROP - show empty values
-            if ($remarks === 'INC' || $remarks === 'DROP') {
-                echo '<td class="text-center"></td>'; // Midterm
-                echo '<td class="text-center"></td>'; // Midterm Weighted
-                echo '<td class="text-center"></td>'; // Finalterm
-                echo '<td class="text-center"></td>'; // Finalterm Weighted
-                echo '<td class="text-center bg-highlight"></td>'; // Total
-                echo '<td class="text-center"></td>'; // Total Computed Grade
-            } else {
-                // Calculate values for PASSED/FAILED/N/A
+            echo '<table><thead><tr>';
+            echo '<th>#</th><th>Student Code</th><th>Student Name</th><th>College</th><th>Department</th><th>Year Level</th>';
+            echo '<th>Midterm</th>';
+            echo '<th>Avg ' . number_format($midterm_weight, 0) . '% (base on the Term weight)</th>';
+            echo '<th>Finalterm</th>';
+            echo '<th>Avg ' . number_format($finalterm_weight, 0) . '% (base on the Term weight)</th>';
+            echo '<th>Total</th><th>Total Computed Grade</th><th>Remarks</th>';
+            echo '</tr></thead><tbody>';
 
-                // Midterm
-                $midterm_value = $final_grade && $final_grade->midterm_grades !== null
-                    ? floatval($final_grade->midterm_grades)
-                    : null;
-                echo '<td class="text-center">' . 
-                    ($midterm_value !== null ? number_format($midterm_value, 2, '.', '') : '') . 
-                    '</td>';
+            $counter = 1;
+            foreach ($students as $student) {
+                $fg      = $this->getFinalGradeRow($student->id);
+                $remarks = $fg['remarks'];
 
-                // Midterm Weighted (Avg % based on term weight)
-                $midterm_weighted = $midterm_value !== null 
-                    ? $midterm_value * ($midterm_weight / 100)
-                    : null;
-                echo '<td class="text-center">' . 
-                    ($midterm_weighted !== null ? number_format($midterm_weighted, 2, '.', '') : '') . 
-                    '</td>';
+                echo '<tr>';
+                echo '<td class="text-center">' . $counter++ . '</td>';
+                echo '<td>' . e($student->code)            . '</td>';
+                echo '<td>' . e($student->fullname)         . '</td>';
+                echo '<td>' . e($student->college   ?? 'N/A') . '</td>';
+                echo '<td>' . e($student->department ?? 'N/A') . '</td>';
+                echo '<td>' . e($student->year_level ?? 'N/A') . '</td>';
 
-                // Finalterm
-                $finalterm_value = $final_grade && $final_grade->finalterm_grades !== null
-                    ? floatval($final_grade->finalterm_grades)
-                    : null;
-                echo '<td class="text-center">' . 
-                    ($finalterm_value !== null ? number_format($finalterm_value, 2, '.', '') : '') . 
-                    '</td>';
-
-                // Finalterm Weighted (Avg % based on term weight)
-                $finalterm_weighted = $finalterm_value !== null 
-                    ? $finalterm_value * ($finalterm_weight / 100)
-                    : null;
-                echo '<td class="text-center">' . 
-                    ($finalterm_weighted !== null ? number_format($finalterm_weighted, 2, '.', '') : '') . 
-                    '</td>';
-
-                // Total (Sum of weighted values)
-                $total_value = null;
-                if ($midterm_weighted !== null && $finalterm_weighted !== null) {
-                    $total_value = $midterm_weighted + $finalterm_weighted;
-                } elseif ($midterm_weighted !== null) {
-                    $total_value = $midterm_weighted;
-                } elseif ($finalterm_weighted !== null) {
-                    $total_value = $finalterm_weighted;
+                if ($remarks === 'INC' || $remarks === 'DROP') {
+                    echo '<td class="text-center"></td>';
+                    echo '<td class="text-center"></td>';
+                    echo '<td class="text-center"></td>';
+                    echo '<td class="text-center"></td>';
+                    echo '<td class="text-center bg-highlight"></td>';
+                    echo '<td class="text-center"></td>';
+                } else {
+                    $calc = $this->calcFinalRow($fg, $midterm_weight, $finalterm_weight);
+                    echo '<td class="text-center">' . ($calc['midterm_value']    !== null ? number_format($calc['midterm_value'],    2, '.', '') : '') . '</td>';
+                    echo '<td class="text-center">' . ($calc['midterm_weighted'] !== null ? number_format($calc['midterm_weighted'], 2, '.', '') : '') . '</td>';
+                    echo '<td class="text-center">' . ($calc['finalterm_value']    !== null ? number_format($calc['finalterm_value'],    2, '.', '') : '') . '</td>';
+                    echo '<td class="text-center">' . ($calc['finalterm_weighted'] !== null ? number_format($calc['finalterm_weighted'], 2, '.', '') : '') . '</td>';
+                    echo '<td class="text-center bg-highlight">' . ($calc['total_value']    !== null ? number_format($calc['total_value'],    2, '.', '') : '') . '</td>';
+                    echo '<td class="text-center">'              . ($calc['computed_grade'] !== null ? number_format($calc['computed_grade'], 2, '.', '') : '') . '</td>';
                 }
-                echo '<td class="text-center bg-highlight">' . 
-                    ($total_value !== null ? number_format($total_value, 2, '.', '') : '') . 
-                    '</td>';
 
-                // Total Computed Grade (Grade equivalent)
-                $computed_grade = null;
-                if ($total_value !== null) {
-                    foreach ($this->point_grade_equivalent as $p_value) {
-                        if ($total_value >= $p_value->minimum && $total_value < $p_value->maximum + 1) {
-                            $computed_grade = floatval($p_value->grade);
-                            break;
-                        }
-                    }
-                }
-                echo '<td class="text-center">' . 
-                    ($computed_grade !== null ? number_format($computed_grade, 2, '.', '') : '') . 
-                    '</td>';
+                echo '<td class="text-center" style="' . $this->remarkStyle($remarks) . '">' . e($remarks) . '</td>';
+                echo '</tr>';
             }
 
-            // Remarks
-            $bg_color = match ($remarks) {
-                'PASSED' => '#198754',
-                'FAILED' => '#dc3545',
-                'INC' => '#ffc107',
-                'DROP' => '#6c757d',
-                default => '#f8f9fa'
-            };
+            echo '</tbody></table>';
+            echo '<br><p><em>Generated on: ' . now()->timezone('Asia/Manila')->format('F d, Y h:i A') . '</em></p>';
+            echo '</body></html>';
+        }, 200, [
+            'Content-Type'        => 'application/vnd.ms-excel',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+            'Pragma'              => 'no-cache',
+            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
+            'Expires'             => '0',
+        ]);
+    }
 
-            $text_color = match ($remarks) {
-                'PASSED' => '#ffffff',
-                'FAILED' => '#ffffff',
-                'INC' => '#000000',
-                'DROP' => '#ffffff',
-                default => '#000000'
-            };
+    // ─── Private helpers ────────────────────────────────────────────────────────
 
-            echo '<td class="text-center" style="background-color: ' . $bg_color . '; color: ' . $text_color . '; font-weight: bold;">' .
-                htmlspecialchars($remarks) .
-                '</td>';
+    /** Get [midterm_weight, finalterm_weight] for the current schedule */
+    private function getTermWeights(): array
+    {
+        $terms = DB::table('terms')
+            ->where('schedule_id', $this->detail['schedule_id'])
+            ->orderBy('term_order', 'asc')
+            ->get();
 
-            echo '</tr>';
+        $mid = 0; $fin = 0;
+        foreach ($terms as $t) {
+            $name = strtolower(trim($t->term_name));
+            if ($name === 'midterm')      $mid = floatval($t->weight);
+            elseif ($name === 'finalterm') $fin = floatval($t->weight);
+        }
+        return [$mid, $fin];
+    }
+
+    /** Fetch a student's final_grades row, returning a normalised array */
+    private function getFinalGradeRow(int $student_id): array
+    {
+        $fg = DB::table('final_grades')
+            ->where('schedule_id', $this->detail['schedule_id'])
+            ->where('student_id', $student_id)
+            ->first();
+
+        return [
+            'midterm_grades'   => $fg->midterm_grades   ?? null,
+            'finalterm_grades' => $fg->finalterm_grades ?? null,
+            'remarks'          => ($fg && $fg->remarks) ? $fg->remarks : 'N/A',
+        ];
+    }
+
+    /** Compute the grade columns from a final_grades row */
+    private function calcFinalRow(array $fg, float $mid_w, float $fin_w): array
+    {
+        $midterm_value    = $fg['midterm_grades']   !== null ? floatval($fg['midterm_grades'])   : null;
+        $finalterm_value  = $fg['finalterm_grades'] !== null ? floatval($fg['finalterm_grades']) : null;
+        $midterm_weighted  = $midterm_value   !== null ? $midterm_value   * ($mid_w / 100) : null;
+        $finalterm_weighted = $finalterm_value !== null ? $finalterm_value * ($fin_w / 100) : null;
+
+        $total_value = null;
+        if ($midterm_weighted !== null && $finalterm_weighted !== null)
+            $total_value = $midterm_weighted + $finalterm_weighted;
+        elseif ($midterm_weighted !== null)
+            $total_value = $midterm_weighted;
+        elseif ($finalterm_weighted !== null)
+            $total_value = $finalterm_weighted;
+
+        $computed_grade = null;
+        if ($total_value !== null) {
+            foreach ($this->point_grade_equivalent as $p) {
+                if ($total_value >= $p->minimum && $total_value < $p->maximum + 1) {
+                    $computed_grade = floatval($p->grade);
+                    break;
+                }
+            }
         }
 
-        echo '</tbody></table>';
-        echo '<br><p><em>Generated on: ' . now()->timezone('Asia/Manila')->format('F d, Y h:i A') . '</em></p>';
-        echo '</body></html>';
-    };
+        return compact('midterm_value', 'midterm_weighted', 'finalterm_value', 'finalterm_weighted', 'total_value', 'computed_grade');
+    }
 
-    return response()->stream($callback, 200, $headers);
-}
+    /** University header banner for Excel (logos + text) */
+    private function excelHeaderBanner(): string
+    {
+        $wmsuUrl = asset('assets/img/exportLogo/wmsu.png');
+        $ccsUrl  = asset('assets/img/exportLogo/ccs.png');
+
+        $empty   = '<td style="border:none;border-top:none;border-bottom:none;border-left:none;border-right:none;mso-border-alt:none;"></td>';
+        $tdStyle = 'style="border:none;border-top:none;border-bottom:none;border-left:none;border-right:none;mso-border-alt:none;"';
+
+        return '
+    <table border="0" cellpadding="0" cellspacing="0" style="border:none;border-collapse:collapse;mso-border-alt:none;">
+    <tr>
+        ' . $empty . $empty . $empty . $empty . $empty . '
+        <td ' . $tdStyle . ' align="center" valign="middle">
+        <img src="' . $wmsuUrl . '" width="70" height="70" alt="WMSU">
+        </td>
+        <td ' . $tdStyle . ' align="center" valign="middle">
+        <p style="margin:0;padding:0;font-size:12pt;">Western Mindanao State University</p>
+        <p style="margin:0;padding:0;font-size:12pt;font-weight:bold;">College of Computing Studies</p>
+        <p style="margin:0;padding:0;font-size:11pt;font-weight:bold;">DEPARTMENT OF COMPUTER SCIENCE</p>
+        <p style="margin:0;padding:0;font-size:10pt;">Zamboanga City</p>
+        </td>
+        <td ' . $tdStyle . ' align="center" valign="middle">
+        <img src="' . $ccsUrl . '" width="70" height="70" alt="CCS">
+        </td>
+    </tr>
+    </table>
+    <br>
+    ';
+    }
+
+    /** Inline style string for a remarks cell */
+    private function remarkStyle(string $remark): string
+    {
+        $bg = match($remark) {
+            'PASSED' => '#198754',
+            'FAILED' => '#dc3545',
+            'INC'    => '#ffc107',
+            'DROP'   => '#6c757d',
+            default  => '#f8f9fa',
+        };
+        $fg = match($remark) {
+            'INC', 'N/A' => '#000000',
+            default      => '#ffffff',
+        };
+        return "background-color:{$bg};color:{$fg};font-weight:bold;";
+    }
 }

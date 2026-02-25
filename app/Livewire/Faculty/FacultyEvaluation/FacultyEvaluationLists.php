@@ -1913,7 +1913,7 @@ class FacultyEvaluationLists extends Component
             $file = fopen('php://output', 'w');
             fprintf($file, chr(0xEF) . chr(0xBB) . chr(0xBF));
 
-            // Header
+            // Column header
             $header = ['#', 'Student Code', 'Student Name', 'College', 'Department', 'Year Level'];
             foreach ($this->school_work_types as $swt) {
                 if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id) {
@@ -1987,6 +1987,7 @@ class FacultyEvaluationLists extends Component
 
         return response()->stream(function () use ($students, $term_name, $lec_pct, $lab_pct, $weight, $lab_weight_pct_lab) {
             echo $this->excelHead($term_name);
+            echo $this->excelHeaderBanner();
             echo '<h2>' . e($term_name) . ' Evaluation Report</h2>';
             echo '<p><strong>School Year:</strong> ' . e($this->school_year) . '</p>';
             echo '<p><strong>Semester:</strong> ' . e($this->semester) . '</p>';
@@ -2128,6 +2129,7 @@ class FacultyEvaluationLists extends Component
 
         return response()->stream(function () use ($students, $term_name, $lab_pct, $weight) {
             echo $this->excelHead($term_name);
+            echo $this->excelHeaderBanner();
             echo '<h2>' . e($term_name) . ' Evaluation Report (Laboratory)</h2>';
             echo '<p><strong>School Year:</strong> ' . e($this->school_year) . '</p>';
             echo '<p><strong>Semester:</strong> ' . e($this->semester) . '</p>';
@@ -2252,6 +2254,44 @@ class FacultyEvaluationLists extends Component
             ->where('schedule_id', $this->detail['schedule_id'])
             ->where('term_id', $this->detail['term_id'])
             ->first();
+    }
+
+    /**
+     * University header banner for Excel exports (logos + text)
+     * Logos are base64-embedded so they render inside the streamed HTML file.
+     */
+    private function excelHeaderBanner(): string
+    {
+        $wmsuUrl = asset('assets/img/exportLogo/wmsu.png');
+        $ccsUrl  = asset('assets/img/exportLogo/ccs.png');
+
+        $empty = '<td style="border:none;border-top:none;border-bottom:none;border-left:none;border-right:none;mso-border-alt:none;"></td>';
+        $tdStyle = 'style="border:none;border-top:none;border-bottom:none;border-left:none;border-right:none;mso-border-alt:none;"';
+
+        return '
+    <table border="0" cellpadding="0" cellspacing="0" style="border:none;border-collapse:collapse;mso-border-alt:none;">
+    <tr>
+        ' . $empty . '
+        ' . $empty . '
+        ' . $empty . '
+        ' . $empty . '
+        ' . $empty . '
+        <td ' . $tdStyle . ' align="center" valign="middle">
+        <img src="' . $wmsuUrl . '" width="70" height="70" alt="WMSU">
+        </td>
+        <td ' . $tdStyle . ' align="center" valign="middle">
+        <p style="margin:0;padding:0;font-size:12pt;">Western Mindanao State University</p>
+        <p style="margin:0;padding:0;font-size:12pt;font-weight:bold;">College of Computing Studies</p>
+        <p style="margin:0;padding:0;font-size:11pt;font-weight:bold;">DEPARTMENT OF COMPUTER SCIENCE</p>
+        <p style="margin:0;padding:0;font-size:10pt;">Zamboanga City</p>
+        </td>
+        <td ' . $tdStyle . ' align="center" valign="middle">
+        <img src="' . $ccsUrl . '" width="70" height="70" alt="CCS">
+        </td>
+    </tr>
+    </table>
+    <br>
+    ';
     }
 
     /** Excel HTML boilerplate head */
