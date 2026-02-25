@@ -1713,7 +1713,7 @@ class FacultyEvaluationLists extends Component
                 ]);
         }
     }
-        /**
+    /**
      * Shared helper: compute one student's row data exactly as the blade does.
      * Returns an array with keys:
      *   swt_cols       => [ ['label'=>..., 'value'=>...], ... ]
@@ -1756,18 +1756,25 @@ class FacultyEvaluationLists extends Component
                 })
                 ->get();
 
-            $sw_count   = 0;
-            $sw_avg     = 0.0;
-            $sw_has_null = false;
+            // Mirrors blade exactly:
+            // $school_work_type_count  → total items (denominator)
+            // $sub_average             → sum of (score/max) only for intval(score) truthy
+            // $temp_sub_total_score    → sum of raw scores (used for @if check)
+            $sw_total_count = 0;
+            $sw_score_sum   = 0.0;
+            $sw_raw_sum     = 0.0;
 
             foreach ($school_works as $sw) {
-                if ($sw->score !== null && $sw->max_score > 0) {
-                    $sw_avg += $sw->score / $sw->max_score;
-                    $sw_count++;
+                $sw_total_count++;
+                if ($sw->score !== null) {
+                    $sw_raw_sum += floatval($sw->score);
+                    // blade: if(intval($v_value['score'])) — skips null AND zero
+                    if (intval($sw->score) && $sw->max_score > 0) {
+                        $sw_score_sum += $sw->score / $sw->max_score;
+                    }
                     $scored_count++;
-                } elseif ($sw->score === null) {
+                } else {
                     $null_count++;
-                    $sw_has_null = true;
                 }
             }
 
@@ -1775,8 +1782,11 @@ class FacultyEvaluationLists extends Component
                 ? ($swt->weight / $total_weight_obj->total_weight * 100)
                 : 0;
 
-            if ($sw_count > 0) {
-                $sub_total   = $sw_avg / $sw_count;
+            // blade: @if($sub_total_score) — only render if raw sum > 0
+            // blade avg = $sub_average / $school_work_type_count_prev
+            //           = score_sum / TOTAL item count (not just scored count)
+            if ($sw_raw_sum > 0 && $sw_total_count > 0) {
+                $sub_total   = $sw_score_sum / $sw_total_count;
                 $col_display = number_format($sub_total * 100, 2, '.', '');
                 $total_grade += $sub_total * $swt_weight_pct / 100;
             } else {
@@ -1868,10 +1878,17 @@ class FacultyEvaluationLists extends Component
             }
         }
 
+        // Blank out Total / Weighted Grade for INC and DROP (matches blade `$is_incomplete` check)
+        $is_incomplete = in_array($remark, ['INC', 'DROP']);
+        if ($is_incomplete) {
+            $weighted_avg   = 0.0;
+            $weighted_grade = '';
+        }
+
         return compact(
             'swt_cols', 'total_grade_pct',
             'lecture_value', 'lab_component', 'lab_value_weighted',
-            'weighted_avg', 'weighted_grade', 'remark'
+            'weighted_avg', 'weighted_grade', 'remark', 'is_incomplete'
         );
     }
 
@@ -1935,9 +1952,10 @@ class FacultyEvaluationLists extends Component
                     $line[] = $row['lab_value_weighted'] !== null ? number_format($row['lab_value_weighted'], 2, '.', '') : '0.00';
                 }
                 if ($this->schedule->is_lec) {
-                    $line[] = $row['weighted_avg'] > 0 ? number_format($row['weighted_avg'], 2, '.', '') : '0.00';
+                    // Blank for INC / DROP
+                    $line[] = $row['is_incomplete'] ? '' : ($row['weighted_avg'] > 0 ? number_format($row['weighted_avg'], 2, '.', '') : '0.00');
                 }
-                $line[] = $row['weighted_grade'];
+                $line[] = $row['is_incomplete'] ? '' : $row['weighted_grade']; // blank for INC/DROP
                 $line[] = $row['remark'];
 
                 fputcsv($file, $line);
@@ -2012,9 +2030,11 @@ class FacultyEvaluationLists extends Component
                     echo '<td class="text-center">' . ($row['lab_value_weighted'] !== null ? number_format($row['lab_value_weighted'], 2, '.', '') : '0.00') . '</td>';
                 }
                 if ($this->schedule->is_lec) {
-                    echo '<td class="text-center" style="background-color:#FFF3CD;font-weight:bold;">' . ($row['weighted_avg'] > 0 ? number_format($row['weighted_avg'], 2, '.', '') : '0.00') . '</td>';
+                    // Blank for INC / DROP
+                    $total_display = $row['is_incomplete'] ? '' : ($row['weighted_avg'] > 0 ? number_format($row['weighted_avg'], 2, '.', '') : '0.00');
+                    echo '<td class="text-center" style="background-color:#FFF3CD;font-weight:bold;">' . $total_display . '</td>';
                 }
-                echo '<td class="text-center">' . e($row['weighted_grade']) . '</td>';
+                echo '<td class="text-center">' . e($row['is_incomplete'] ? '' : $row['weighted_grade']) . '</td>';
                 echo '<td class="text-center" style="' . $this->remarkStyle($row['remark']) . '">' . e($row['remark']) . '</td>';
                 echo '</tr>';
             }
@@ -2078,7 +2098,7 @@ class FacultyEvaluationLists extends Component
                 foreach ($row['swt_cols'] as $col) $line[] = $col['value'];
                 $line[] = $row['total_grade_pct'] > 0 ? number_format($row['total_grade_pct'], 2, '.', '') : '';
                 $line[] = $row['lab_value_weighted'] !== null ? number_format($row['lab_value_weighted'], 2, '.', '') : '0.00';
-                $line[] = $row['weighted_grade'];
+                $line[] = $row['is_incomplete'] ? '' : $row['weighted_grade']; // blank for INC/DROP
                 $line[] = $row['remark'];
 
                 fputcsv($file, $line);
@@ -2142,7 +2162,7 @@ class FacultyEvaluationLists extends Component
 
                 echo '<td class="text-center">' . ($row['total_grade_pct'] > 0 ? number_format($row['total_grade_pct'], 2, '.', '') : '') . '</td>';
                 echo '<td class="text-center">' . ($row['lab_value_weighted'] !== null ? number_format($row['lab_value_weighted'], 2, '.', '') : '0.00') . '</td>';
-                echo '<td class="text-center">' . e($row['weighted_grade']) . '</td>';
+                echo '<td class="text-center">' . e($row['is_incomplete'] ? '' : $row['weighted_grade']) . '</td>'; // blank for INC/DROP
                 echo '<td class="text-center" style="' . $this->remarkStyle($row['remark']) . '">' . e($row['remark']) . '</td>';
                 echo '</tr>';
             }
