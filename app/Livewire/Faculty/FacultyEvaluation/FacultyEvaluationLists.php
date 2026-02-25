@@ -1713,804 +1713,459 @@ class FacultyEvaluationLists extends Component
                 ]);
         }
     }
+        /**
+     * Shared helper: compute one student's row data exactly as the blade does.
+     * Returns an array with keys:
+     *   swt_cols       => [ ['label'=>..., 'value'=>...], ... ]
+     *   total_grade    => float (0-100 scale, i.e. $total_grade*100)
+     *   lecture_value  => float|null
+     *   lab_component  => float|null   (unweighted, 0-100 scale)
+     *   lab_value      => float|null   (weighted)
+     *   weighted_avg   => float
+     *   weighted_grade => string
+     *   remark         => string
+     */
+    private function calcStudentRow(
+        $student,
+        array $school_work_types,
+        $total_weight_obj,
+        $lecture_weight_pct,
+        $laboratory_weight_pct,
+        $lab_weight_pct_lab   // used only when is_lec == 0
+    ): array {
+        // ── 1. School-work-type sub-totals (same loop as blade) ─────────────
+        $swt_cols       = [];
+        $total_grade    = 0.0;
+        $sub_average    = 0.0;
+        $null_count     = 0;
+        $scored_count   = 0;
+
+        foreach ($school_work_types as $swt) {
+            if ($swt->weight <= 0 || $swt->id == $this->current_school_work_type->id) {
+                continue;
+            }
+
+            $school_works = DB::table('school_works as sw')
+                ->select('sw.id', 'sw.max_score', 'sws.score')
+                ->leftJoin('school_work_scores as sws', 'sws.school_work_id', 'sw.id')
+                ->where('sw.school_work_type_id', $swt->id)
+                ->where('sw.schedule_id', $this->detail['schedule_id'])
+                ->where('sw.term_id', $this->detail['term_id'])
+                ->where(function ($q) use ($student) {
+                    $q->whereNull('sws.student_id')->orWhere('sws.student_id', $student->id);
+                })
+                ->get();
+
+            $sw_count   = 0;
+            $sw_avg     = 0.0;
+            $sw_has_null = false;
+
+            foreach ($school_works as $sw) {
+                if ($sw->score !== null && $sw->max_score > 0) {
+                    $sw_avg += $sw->score / $sw->max_score;
+                    $sw_count++;
+                    $scored_count++;
+                } elseif ($sw->score === null) {
+                    $null_count++;
+                    $sw_has_null = true;
+                }
+            }
+
+            $swt_weight_pct = $total_weight_obj->total_weight
+                ? ($swt->weight / $total_weight_obj->total_weight * 100)
+                : 0;
+
+            if ($sw_count > 0) {
+                $sub_total   = $sw_avg / $sw_count;
+                $col_display = number_format($sub_total * 100, 2, '.', '');
+                $total_grade += $sub_total * $swt_weight_pct / 100;
+            } else {
+                $sub_total   = 0;
+                $col_display = '';
+            }
+
+            $swt_cols[] = [
+                'label' => $swt->school_work_type,
+                'value' => $col_display,
+            ];
+        }
+
+        $total_grade_pct = $total_grade * 100; // now on 0-100 scale (matches blade)
+
+        // ── 2. Lecture / Lab values (mirrors blade @php blocks) ──────────────
+        $lecture_value      = null;
+        $lab_component      = null; // unweighted, 0-100 scale
+        $lab_value_weighted = null;
+
+        if ($this->schedule->is_lec) {
+            // Lecture = Total × (lecture_weight / 100)
+            if ($total_grade_pct > 0) {
+                $lecture_value = $total_grade_pct * ($lecture_weight_pct / 100);
+            }
+
+            // Laboratory from lab_values table
+            if ($this->schedule->laboratory_unit > 0) {
+                $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
+                $term_type    = $current_term ? $current_term->term_name : 'Midterm';
+
+                $lv = DB::table('lab_values')
+                    ->where('student_id', $student->id)
+                    ->where('term_type', $term_type)
+                    ->first();
+
+                if ($lv && floatval($lv->value_lab)) {
+                    $lab_component      = floatval($lv->value_lab);          // unweighted
+                    $lab_value_weighted = $lab_component * ($laboratory_weight_pct / 100);
+                }
+            }
+        } else {
+            // Pure lab schedule: Lab = Total × (lab_weight / 100)
+            if ($total_grade_pct > 0) {
+                $lab_component      = $total_grade_pct;                        // unweighted = Total
+                $lab_value_weighted = $total_grade_pct * ($lab_weight_pct_lab / 100);
+            }
+        }
+
+        // ── 3. Weighted average (mirrors blade) ──────────────────────────────
+        $weighted_avg = 0.0;
+
+        if ($this->schedule->is_lec) {
+            if ($lecture_value !== null && $lab_component !== null) {
+                $weighted_avg = $lecture_value + ($lab_component * ($laboratory_weight_pct / 100));
+            } elseif ($lecture_value !== null) {
+                $weighted_avg = $lecture_value;
+            }
+        } else {
+            // For pure lab: weighted_avg = Total (same as blade)
+            $weighted_avg = $total_grade_pct;
+        }
+
+        // ── 4. Incomplete / Drop check (mirrors blade remark logic) ──────────
+        $total_sw_count = $scored_count + $null_count;
+
+        if ($total_sw_count > 0 && $null_count === $total_sw_count) {
+            $remark = 'DROP';
+        } elseif ($null_count > 0 && $null_count < $total_sw_count) {
+            $remark = 'INC';
+        } elseif ($weighted_avg === 0.0) {
+            $remark = 'INC';
+        } elseif ($weighted_avg >= 100 && $weighted_avg <= 300) {
+            $remark = 'PASSED';
+        } elseif ($weighted_avg == 500 || $weighted_avg < 60) {
+            $remark = 'FAILED';
+        } else {
+            $remark = 'PASSED';
+        }
+
+        // ── 5. Point-grade equivalent ─────────────────────────────────────────
+        $weighted_grade = '';
+        if ($weighted_avg > 0) {
+            foreach ($this->point_grade_equivalent as $p) {
+                if ($weighted_avg >= $p->minimum && $weighted_avg < $p->maximum + 1) {
+                    $weighted_grade = $p->grade;
+                    break;
+                }
+            }
+        }
+
+        return compact(
+            'swt_cols', 'total_grade_pct',
+            'lecture_value', 'lab_component', 'lab_value_weighted',
+            'weighted_avg', 'weighted_grade', 'remark'
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // EXPORT CSV  (Lecture schedule)
+    // ─────────────────────────────────────────────────────────────────────────────
     public function exportCSV()
     {
-        // Get all students for this schedule
-        $students = DB::table('enrolled_students as es')
-            ->select(
-                's.id',
-                's.code',
-                DB::raw('CONCAT_WS(" ", s.first_name, s.middle_name, s.last_name, s.suffix) AS fullname'),
-                'c.name as college',
-                'd.name as department',
-                'yl.year_level'
-            )
-            ->leftJoin('students as s', 's.id', 'es.student_id')
-            ->leftJoin('colleges as c', 'c.id', 's.college_id')
-            ->leftJoin('departments as d', 'd.id', 's.department_id')
-            ->leftJoin('year_levels as yl', 'yl.id', 's.year_level_id')
-            ->where('es.schedule_id', '=', $this->detail['schedule_id'])
-            ->orderBy('s.is_active', 'desc')
-            ->orderBy('s.id', 'desc')
-            ->get();
+        $students = $this->getExportStudents();
 
-        // Apply filters
-        if (!empty($this->filters['search'])) {
-            $students = $students->filter(function ($student) {
-                return stripos($student->code, $this->filters['search']) !== false ||
-                    stripos($student->fullname, $this->filters['search']) !== false;
-            });
-        }
-
-        if (!empty($this->filters['remarks'])) {
-            $student_ids = DB::table('term_grades')
-                ->where('schedule_id', '=', $this->detail['schedule_id'])
-                ->where('term_id', '=', $this->detail['term_id'])
-                ->where('remarks', '=', $this->filters['remarks'])
-                ->pluck('student_id')
-                ->toArray();
-            $students = $students->whereIn('id', $student_ids);
-        }
-
-        // Get current term info
         $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
-        $term_name = $current_term ? $current_term->term_name : 'Term';
+        $term_name    = $current_term ? $current_term->term_name : 'Term';
 
-        // Get Lab Lec Weight values
-        $lab_lec_weight = DB::table('lab_lec')
-            ->where('schedule_id', '=', $this->detail['schedule_id'])
-            ->where('term_id', '=', $this->detail['term_id'])
-            ->first();
+        [$lec_pct, $lab_pct] = $this->getLabLecPcts();
 
-        $lecture_weight_percent = $lab_lec_weight ? floatval($lab_lec_weight->sub_weight) : 80;
-        $laboratory_weight_percent = 100 - $lecture_weight_percent;
+        $filename = 'evaluation_' . $term_name . '_' . $this->school_year . '_' . $this->semester
+            . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.csv';
 
-        // Prepare CSV
-        $filename = 'evaluation_' . $term_name . '_' . $this->school_year . '_' . $this->semester . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.csv';
+        $weight = $this->getTotalWeight();
 
-        $headers = [
-            'Content-Type' => 'text/csv',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-        ];
-
-        $callback = function () use ($students, $term_name, $lecture_weight_percent, $laboratory_weight_percent) {
+        return response()->stream(function () use ($students, $term_name, $lec_pct, $lab_pct, $weight) {
             $file = fopen('php://output', 'w');
             fprintf($file, chr(0xEF) . chr(0xBB) . chr(0xBF));
 
-            // Header row
+            // Header
             $header = ['#', 'Student Code', 'Student Name', 'College', 'Department', 'Year Level'];
-
-            // Add school work type columns
             foreach ($this->school_work_types as $swt) {
                 if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id) {
                     $header[] = $swt->school_work_type . ' (%)';
                 }
             }
-
             $header[] = 'Total';
-
-            if ($this->schedule->is_lec) {
-                $header[] = 'Lecture (Weighted ' . number_format($lecture_weight_percent, 2) . '%)';
-            }
-            if ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) {
-                $header[] = 'Laboratory (Weighted ' . number_format($laboratory_weight_percent, 2) . '%)';
-            }
-            if ($this->schedule->is_lec) {
-                $header[] = 'Total (Weighted Avg)';
-            }
+            if ($this->schedule->is_lec)                                         $header[] = 'Lecture (Weighted ' . number_format($lec_pct, 2) . '%)';
+            if ($this->schedule->laboratory_unit > 0 || !$this->schedule->is_lec) $header[] = 'Laboratory (Weighted ' . number_format($lab_pct, 2) . '%)';
+            if ($this->schedule->is_lec)                                         $header[] = 'Total (Weighted Avg)';
             $header[] = 'Weighted Grade';
             $header[] = 'Remarks';
-
             fputcsv($file, $header);
 
-            // Get weight totals
-            $weight = DB::table('school_works_types')
-                ->select(DB::raw('sum(weight) as total_weight'))
-                ->where('schedule_id', '=', $this->detail['schedule_id'])
-                ->where('term_id', '=', $this->detail['term_id'])
-                ->first();
-
-            // Data rows
-            $counter = 1;
+            // Rows
+            $lab_weight_pct_lab = $this->getLabOnlyPct();
+            $i = 1;
             foreach ($students as $student) {
-                $row = [
-                    $counter++,
+                $row = $this->calcStudentRow($student, $this->school_work_types, $weight, $lec_pct, $lab_pct, $lab_weight_pct_lab);
+
+                $line = [
+                    $i++,
                     $student->code,
                     $student->fullname,
-                    $student->college ?? 'N/A',
+                    $student->college   ?? 'N/A',
                     $student->department ?? 'N/A',
-                    $student->year_level ?? 'N/A'
+                    $student->year_level ?? 'N/A',
                 ];
+                foreach ($row['swt_cols'] as $col) $line[] = $col['value'];
+                $line[] = $row['total_grade_pct'] > 0 ? number_format($row['total_grade_pct'], 2, '.', '') : '';
 
-                // Calculate school work scores
-                $total_grade = 0;
-                foreach ($this->school_work_types as $swt) {
-                    if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id) {
-                        $school_works = DB::table('school_works as sw')
-                            ->select('sw.id', 'sw.max_score', 'sws.score')
-                            ->leftJoin('school_work_scores as sws', 'sws.school_work_id', 'sw.id')
-                            ->where('sw.school_work_type_id', '=', $swt->id)
-                            ->where('sw.schedule_id', '=', $this->detail['schedule_id'])
-                            ->where('sw.term_id', '=', $this->detail['term_id'])
-                            ->where(function ($query) use ($student) {
-                                $query->whereNull('sws.student_id')->orWhere('sws.student_id', $student->id);
-                            })
-                            ->get();
-
-                        $school_work_count = 0;
-                        $school_work_average = 0;
-                        foreach ($school_works as $sw) {
-                            if ($sw->score !== null && $sw->max_score > 0) {
-                                $school_work_average += ($sw->score / $sw->max_score);
-                                $school_work_count++;
-                            }
-                        }
-
-                        if ($school_work_count > 0) {
-                            $sub_total = $school_work_average / $school_work_count;
-                            $row[] = number_format($sub_total * 100, 2, '.', '');
-                            $school_work_type_weight = $weight->total_weight ? ($swt->weight / $weight->total_weight * 100) : 0;
-                            $total_grade += ($sub_total * $school_work_type_weight / 100);
-                        } else {
-                            $row[] = '';
-                        }
-                    }
-                }
-
-                // Total column
-                $row[] = $total_grade > 0 ? number_format($total_grade * 100, 2, '.', '') : '';
-
-                // Variables to store component grades
-                $lecture_component = null;
-                $laboratory_component = null;
-
-                // Lecture Grade (Weighted)
                 if ($this->schedule->is_lec) {
-                    $lab_lec_grades = DB::table('lab_lec_grades')
-                        ->where('schedule_id', '=', $this->detail['schedule_id'])
-                        ->where('student_id', '=', $student->id)
-                        ->first();
-
-                    if ($lab_lec_grades != null && floatval($lab_lec_grades->grade)) {
-                        $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
-                        $term_weight_percent = $current_term ? $current_term->weight : 100;
-                        $actual_grade_percent = ($lab_lec_grades->grade / $lab_lec_grades->sub_weight) * 100;
-                        $scaled_lecture_grade = ($actual_grade_percent / $term_weight_percent) * 10000;
-                        
-                        // Apply lecture weight
-                        $weighted_lecture_grade = $scaled_lecture_grade * ($lecture_weight_percent / 100);
-                        $lecture_component = $scaled_lecture_grade;
-                        
-                        $row[] = number_format($weighted_lecture_grade, 2, '.', '');
-                    } else {
-                        $row[] = $lab_lec_grades ? $lab_lec_grades->other : '';
-                    }
+                    $line[] = $row['lecture_value'] !== null ? number_format($row['lecture_value'], 2, '.', '') : '';
                 }
-
-                // Laboratory Grade (Weighted)
-                if ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) {
-                    $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
-                    $term_type = $current_term ? $current_term->term_name : 'Midterm';
-
-                    if ($this->schedule->is_lec == 1) {
-                        $lab_value = DB::table('lab_values')
-                            ->where('student_id', '=', $student->id)
-                            ->where('term_type', '=', $term_type)
-                            ->first();
-
-                        if ($lab_value && floatval($lab_value->value_lab)) {
-                            $scaled_laboratory_grade = floatval($lab_value->value_lab);
-                            
-                            // Apply laboratory weight
-                            $weighted_laboratory_grade = $scaled_laboratory_grade * ($laboratory_weight_percent / 100);
-                            $laboratory_component = $scaled_laboratory_grade;
-                            
-                            $row[] = number_format($weighted_laboratory_grade, 2, '.', '');
-                        } else {
-                            $row[] = '0.00';
-                        }
-                    } else {
-                        // For laboratory schedules
-                        $lab_lec_grade = DB::table('lab_lec_grades')
-                            ->where('schedule_id', '=', $this->detail['schedule_id'])
-                            ->where('student_id', '=', $student->id)
-                            ->first();
-
-                        // Get lab weight
-                        $lab_lec_weight_lab = DB::table('lab_lec')
-                            ->where('schedule_id', '=', $this->detail['schedule_id'])
-                            ->where('term_id', '=', $this->detail['term_id'])
-                            ->first();
-                        
-                        $lab_weight_percent = $lab_lec_weight_lab ? floatval($lab_lec_weight_lab->sub_weight) : 100;
-
-                        if ($lab_lec_grade != null && floatval($lab_lec_grade->grade)) {
-                            $term_weight_percent = $current_term ? $current_term->weight : 100;
-                            $actual_lab_grade_percent = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100;
-                            $scaled_laboratory_grade = ($actual_lab_grade_percent / $term_weight_percent) * 10000;
-                            
-                            // Apply laboratory weight
-                            $weighted_laboratory_grade = $scaled_laboratory_grade * ($lab_weight_percent / 100);
-                            $laboratory_component = $scaled_laboratory_grade;
-                            
-                            $row[] = number_format($weighted_laboratory_grade, 2, '.', '');
-                        } else {
-                            $row[] = $lab_lec_grade ? $lab_lec_grade->other : '0.00';
-                        }
-                    }
+                if ($this->schedule->laboratory_unit > 0 || !$this->schedule->is_lec) {
+                    $line[] = $row['lab_value_weighted'] !== null ? number_format($row['lab_value_weighted'], 2, '.', '') : '0.00';
                 }
-
-                // Total (Weighted Average) - only for lecture schedules
                 if ($this->schedule->is_lec) {
-                    $weighted_average = 0;
-                    if ($lecture_component !== null && $laboratory_component !== null) {
-                        $weighted_average = ($lecture_component * ($lecture_weight_percent / 100)) + 
-                                        ($laboratory_component * ($laboratory_weight_percent / 100));
-                    } elseif ($lecture_component !== null) {
-                        $weighted_average = $lecture_component;
-                    }
-                    $row[] = $weighted_average > 0 ? number_format($weighted_average, 2, '.', '') : '0.00';
-                } else {
-                    // For lab-only schedules, use laboratory component directly
-                    $weighted_average = $laboratory_component ?? 0;
+                    $line[] = $row['weighted_avg'] > 0 ? number_format($row['weighted_avg'], 2, '.', '') : '0.00';
                 }
+                $line[] = $row['weighted_grade'];
+                $line[] = $row['remark'];
 
-                // Weighted Grade
-                $weighted_grade = '';
-                if ($weighted_average > 0) {
-                    foreach ($this->point_grade_equivalent as $p_value) {
-                        if ($weighted_average >= $p_value->minimum && $weighted_average < $p_value->maximum + 1) {
-                            $weighted_grade = $p_value->grade;
-                            break;
-                        }
-                    }
-                }
-                $row[] = $weighted_grade;
-
-                // Remarks
-                $term_grade_record = DB::table('term_grades')
-                    ->where('schedule_id', '=', $this->detail['schedule_id'])
-                    ->where('student_id', '=', $student->id)
-                    ->where('term_id', '=', $this->detail['term_id'])
-                    ->first();
-
-                $row[] = $term_grade_record && $term_grade_record->remarks ? $term_grade_record->remarks : 'N/A';
-
-                fputcsv($file, $row);
+                fputcsv($file, $line);
             }
-
             fclose($file);
-        };
-
-        return response()->stream($callback, 200, $headers);
+        }, 200, [
+            'Content-Type'        => 'text/csv',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+        ]);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────
+    // EXPORT EXCEL (Lecture schedule)
+    // ─────────────────────────────────────────────────────────────────────────────
     public function exportExcel()
     {
-        // Get all students for this schedule
-        $students = DB::table('enrolled_students as es')
-            ->select(
-                's.id',
-                's.code',
-                DB::raw('CONCAT_WS(" ", s.first_name, s.middle_name, s.last_name, s.suffix) AS fullname'),
-                'c.name as college',
-                'd.name as department',
-                'yl.year_level'
-            )
-            ->leftJoin('students as s', 's.id', 'es.student_id')
-            ->leftJoin('colleges as c', 'c.id', 's.college_id')
-            ->leftJoin('departments as d', 'd.id', 's.department_id')
-            ->leftJoin('year_levels as yl', 'yl.id', 's.year_level_id')
-            ->where('es.schedule_id', '=', $this->detail['schedule_id'])
-            ->orderBy('s.is_active', 'desc')
-            ->orderBy('s.id', 'desc')
-            ->get();
+        $students = $this->getExportStudents();
 
-        // Apply filters
-        if (!empty($this->filters['search'])) {
-            $students = $students->filter(function ($student) {
-                return stripos($student->code, $this->filters['search']) !== false ||
-                    stripos($student->fullname, $this->filters['search']) !== false;
-            });
-        }
-
-        if (!empty($this->filters['remarks'])) {
-            $student_ids = DB::table('term_grades')
-                ->where('schedule_id', '=', $this->detail['schedule_id'])
-                ->where('term_id', '=', $this->detail['term_id'])
-                ->where('remarks', '=', $this->filters['remarks'])
-                ->pluck('student_id')
-                ->toArray();
-            $students = $students->whereIn('id', $student_ids);
-        }
-
-        // Get current term info
         $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
-        $term_name = $current_term ? $current_term->term_name : 'Term';
+        $term_name    = $current_term ? $current_term->term_name : 'Term';
 
-        // Get Lab Lec Weight values
-        $lab_lec_weight = DB::table('lab_lec')
-            ->where('schedule_id', '=', $this->detail['schedule_id'])
-            ->where('term_id', '=', $this->detail['term_id'])
-            ->first();
+        [$lec_pct, $lab_pct] = $this->getLabLecPcts();
 
-        $lecture_weight_percent = $lab_lec_weight ? floatval($lab_lec_weight->sub_weight) : 80;
-        $laboratory_weight_percent = 100 - $lecture_weight_percent;
+        $filename = 'evaluation_' . $term_name . '_' . $this->school_year . '_' . $this->semester
+            . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.xls';
 
-        // Create Excel content
-        $filename = 'evaluation_' . $term_name . '_' . $this->school_year . '_' . $this->semester . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.xls';
+        $weight             = $this->getTotalWeight();
+        $lab_weight_pct_lab = $this->getLabOnlyPct();
 
-        $headers = [
-            'Content-Type' => 'application/vnd.ms-excel',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-            'Pragma' => 'no-cache',
-            'Cache-Control' => 'must-revalidate, post-check=0, pre-check=0',
-            'Expires' => '0',
-        ];
-
-        $callback = function () use ($students, $term_name, $lecture_weight_percent, $laboratory_weight_percent) {
-            echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
-            echo '<head>';
-            echo '<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">';
-            echo '<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>';
-            echo '<x:Name>Evaluation</x:Name>';
-            echo '<x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet>';
-            echo '</x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->';
-            echo '<style>';
-            echo 'table { border-collapse: collapse; width: 100%; }';
-            echo 'th, td { border: 1px solid black; padding: 8px; text-align: left; }';
-            echo 'th { background-color: #952323; color: white; font-weight: bold; }';
-            echo '.text-center { text-align: center; }';
-            echo '</style>';
-            echo '</head><body>';
-
-            // Add title and schedule info
-            echo '<h2>' . htmlspecialchars($term_name) . ' Evaluation Report</h2>';
-            echo '<p><strong>School Year:</strong> ' . htmlspecialchars($this->school_year) . '</p>';
-            echo '<p><strong>Semester:</strong> ' . htmlspecialchars($this->semester) . '</p>';
+        return response()->stream(function () use ($students, $term_name, $lec_pct, $lab_pct, $weight, $lab_weight_pct_lab) {
+            echo $this->excelHead($term_name);
+            echo '<h2>' . e($term_name) . ' Evaluation Report</h2>';
+            echo '<p><strong>School Year:</strong> ' . e($this->school_year) . '</p>';
+            echo '<p><strong>Semester:</strong> ' . e($this->semester) . '</p>';
             if ($this->schedule) {
-                echo '<p><strong>Subject:</strong> ' . htmlspecialchars($this->schedule->subject) . '</p>';
-                echo '<p><strong>Faculty:</strong> ' . htmlspecialchars($this->schedule->faculty_fullname) . '</p>';
+                echo '<p><strong>Subject:</strong> ' . e($this->schedule->subject) . '</p>';
+                echo '<p><strong>Faculty:</strong> ' . e($this->schedule->faculty_fullname) . '</p>';
             }
-            echo '<p><strong>Lab/Lecture Weight:</strong> Lecture ' . number_format($lecture_weight_percent, 2) . '% / Laboratory ' . number_format($laboratory_weight_percent, 2) . '%</p>';
-            echo '<br>';
-
-            echo '<table>';
-
-            // Header row
-            echo '<thead><tr>';
-            echo '<th>#</th>';
-            echo '<th>Student Code</th>';
-            echo '<th>Student Name</th>';
-            echo '<th>College</th>';
-            echo '<th>Department</th>';
-            echo '<th>Year Level</th>';
-
-            // Add school work type columns dynamically
+            echo '<p><strong>Lab/Lecture Weight:</strong> Lecture ' . number_format($lec_pct, 2) . '% / Laboratory ' . number_format($lab_pct, 2) . '%</p><br>';
+            echo '<table><thead><tr>';
+            echo '<th>#</th><th>Student Code</th><th>Student Name</th><th>College</th><th>Department</th><th>Year Level</th>';
             foreach ($this->school_work_types as $swt) {
-                if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id) {
-                    echo '<th>' . htmlspecialchars($swt->school_work_type) . ' (%)</th>';
-                }
+                if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id)
+                    echo '<th>' . e($swt->school_work_type) . ' (%)</th>';
             }
-
             echo '<th>Total</th>';
+            if ($this->schedule->is_lec)                                          echo '<th>Lecture (Weighted ' . number_format($lec_pct, 2) . '%)</th>';
+            if ($this->schedule->laboratory_unit > 0 || !$this->schedule->is_lec) echo '<th>Laboratory (Weighted ' . number_format($lab_pct, 2) . '%)</th>';
+            if ($this->schedule->is_lec)                                          echo '<th>Total (Weighted Avg)</th>';
+            echo '<th>Weighted Grade</th><th>Remarks</th></tr></thead><tbody>';
 
-            if ($this->schedule->is_lec) {
-                echo '<th>Lecture (Weighted ' . number_format($lecture_weight_percent, 2) . '%)</th>';
-            }
-            if ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) {
-                echo '<th>Laboratory (Weighted ' . number_format($laboratory_weight_percent, 2) . '%)</th>';
-            }
-            if ($this->schedule->is_lec) {
-                echo '<th>Total (Weighted Avg)</th>';
-            }
-            echo '<th>Weighted Grade</th>';
-            echo '<th>Remarks</th>';
-            echo '</tr></thead><tbody>';
-
-            // Get weight totals
-            $weight = DB::table('school_works_types')
-                ->select(DB::raw('sum(weight) as total_weight'))
-                ->where('schedule_id', '=', $this->detail['schedule_id'])
-                ->where('term_id', '=', $this->detail['term_id'])
-                ->first();
-
-            // Data rows
-            $counter = 1;
+            $i = 1;
             foreach ($students as $student) {
+                $row = $this->calcStudentRow($student, $this->school_work_types, $weight, $lec_pct, $lab_pct, $lab_weight_pct_lab);
                 echo '<tr>';
-                echo '<td class="text-center">' . $counter++ . '</td>';
-                echo '<td>' . htmlspecialchars($student->code) . '</td>';
-                echo '<td>' . htmlspecialchars($student->fullname) . '</td>';
-                echo '<td>' . htmlspecialchars($student->college ?? 'N/A') . '</td>';
-                echo '<td>' . htmlspecialchars($student->department ?? 'N/A') . '</td>';
-                echo '<td>' . htmlspecialchars($student->year_level ?? 'N/A') . '</td>';
+                echo '<td>' . $i++ . '</td>';
+                echo '<td>' . e($student->code) . '</td>';
+                echo '<td>' . e($student->fullname) . '</td>';
+                echo '<td>' . e($student->college   ?? 'N/A') . '</td>';
+                echo '<td>' . e($student->department ?? 'N/A') . '</td>';
+                echo '<td>' . e($student->year_level ?? 'N/A') . '</td>';
 
-                // Calculate school work scores
-                $total_grade = 0;
-                foreach ($this->school_work_types as $key => $swt) {
-                    if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id) {
-                        $school_works = DB::table('school_works as sw')
-                            ->select('sw.id', 'sw.max_score', 'sws.score')
-                            ->leftJoin('school_work_scores as sws', 'sws.school_work_id', 'sw.id')
-                            ->where('sw.school_work_type_id', '=', $swt->id)
-                            ->where('sw.schedule_id', '=', $this->detail['schedule_id'])
-                            ->where('sw.term_id', '=', $this->detail['term_id'])
-                            ->where(function ($query) use ($student) {
-                                $query->whereNull('sws.student_id')
-                                    ->orWhere('sws.student_id', $student->id);
-                            })
-                            ->get();
+                foreach ($row['swt_cols'] as $col)
+                    echo '<td class="text-center">' . e($col['value']) . '</td>';
 
-                        $school_work_count = 0;
-                        $school_work_average = 0;
-                        foreach ($school_works as $sw) {
-                            if ($sw->score !== null && $sw->max_score > 0) {
-                                $school_work_average += ($sw->score / $sw->max_score);
-                                $school_work_count++;
-                            }
-                        }
+                echo '<td class="text-center">' . ($row['total_grade_pct'] > 0 ? number_format($row['total_grade_pct'], 2, '.', '') : '') . '</td>';
 
-                        if ($school_work_count > 0) {
-                            $sub_total = $school_work_average / $school_work_count;
-                            echo '<td class="text-center">' . number_format($sub_total * 100, 2, '.', '') . '</td>';
-                            $school_work_type_weight = $weight->total_weight ? ($swt->weight / $weight->total_weight * 100) : 0;
-                            $total_grade += ($sub_total * $school_work_type_weight / 100);
-                        } else {
-                            echo '<td class="text-center"></td>';
-                        }
-                    }
-                }
-
-                // Total column
-                echo '<td class="text-center">' . ($total_grade > 0 ? number_format($total_grade * 100, 2, '.', '') : '') . '</td>';
-
-                // Variables to store component grades
-                $lecture_component = null;
-                $laboratory_component = null;
-
-                // Lecture Grade (Weighted)
                 if ($this->schedule->is_lec) {
-                    $lab_lec_grades = DB::table('lab_lec_grades')
-                        ->where('schedule_id', '=', $this->detail['schedule_id'])
-                        ->where('student_id', '=', $student->id)
-                        ->first();
-
-                    if ($lab_lec_grades != null && floatval($lab_lec_grades->grade)) {
-                        $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
-                        $term_weight_percent = $current_term ? $current_term->weight : 100;
-                        $actual_grade_percent = ($lab_lec_grades->grade / $lab_lec_grades->sub_weight) * 100;
-                        $scaled_lecture_grade = ($actual_grade_percent / $term_weight_percent) * 10000;
-                        
-                        // Apply lecture weight
-                        $weighted_lecture_grade = $scaled_lecture_grade * ($lecture_weight_percent / 100);
-                        $lecture_component = $scaled_lecture_grade;
-                        
-                        echo '<td class="text-center">' . number_format($weighted_lecture_grade, 2, '.', '') . '</td>';
-                    } else {
-                        echo '<td class="text-center">' . htmlspecialchars($lab_lec_grades ? $lab_lec_grades->other : '') . '</td>';
-                    }
+                    echo '<td class="text-center">' . ($row['lecture_value'] !== null ? number_format($row['lecture_value'], 2, '.', '') : '') . '</td>';
                 }
-
-                // Laboratory Grade (Weighted)
-                if ($this->schedule->laboratory_unit > 0 || $this->schedule->is_lec == 0) {
-                    $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
-                    $term_type = $current_term ? $current_term->term_name : 'Midterm';
-
-                    if ($this->schedule->is_lec == 1) {
-                        // For lecture schedules, get from lab_values
-                        $lab_value = DB::table('lab_values')
-                            ->where('student_id', '=', $student->id)
-                            ->where('term_type', '=', $term_type)
-                            ->first();
-
-                        if ($lab_value && floatval($lab_value->value_lab)) {
-                            $scaled_laboratory_grade = floatval($lab_value->value_lab);
-                            
-                            // Apply laboratory weight
-                            $weighted_laboratory_grade = $scaled_laboratory_grade * ($laboratory_weight_percent / 100);
-                            $laboratory_component = $scaled_laboratory_grade;
-                            
-                            echo '<td class="text-center">' . number_format($weighted_laboratory_grade, 2, '.', '') . '</td>';
-                        } else {
-                            echo '<td class="text-center">0.00</td>';
-                        }
-                    } else {
-                        // For laboratory schedules
-                        $lab_lec_grade = DB::table('lab_lec_grades')
-                            ->where('schedule_id', '=', $this->detail['schedule_id'])
-                            ->where('student_id', '=', $student->id)
-                            ->first();
-
-                        // Get lab weight
-                        $lab_lec_weight_lab = DB::table('lab_lec')
-                            ->where('schedule_id', '=', $this->detail['schedule_id'])
-                            ->where('term_id', '=', $this->detail['term_id'])
-                            ->first();
-                        
-                        $lab_weight_percent = $lab_lec_weight_lab ? floatval($lab_lec_weight_lab->sub_weight) : 100;
-
-                        if ($lab_lec_grade != null && floatval($lab_lec_grade->grade)) {
-                            $term_weight_percent = $current_term ? $current_term->weight : 100;
-                            $actual_lab_grade_percent = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100;
-                            $scaled_laboratory_grade = ($actual_lab_grade_percent / $term_weight_percent) * 10000;
-                            
-                            // Apply laboratory weight
-                            $weighted_laboratory_grade = $scaled_laboratory_grade * ($lab_weight_percent / 100);
-                            $laboratory_component = $scaled_laboratory_grade;
-                            
-                            echo '<td class="text-center">' . number_format($weighted_laboratory_grade, 2, '.', '') . '</td>';
-                        } else {
-                            echo '<td class="text-center">' . htmlspecialchars($lab_lec_grade ? $lab_lec_grade->other : '0.00') . '</td>';
-                        }
-                    }
+                if ($this->schedule->laboratory_unit > 0 || !$this->schedule->is_lec) {
+                    echo '<td class="text-center">' . ($row['lab_value_weighted'] !== null ? number_format($row['lab_value_weighted'], 2, '.', '') : '0.00') . '</td>';
                 }
-
-                // Total (Weighted Average) - only for lecture schedules
                 if ($this->schedule->is_lec) {
-                    $weighted_average = 0;
-                    if ($lecture_component !== null && $laboratory_component !== null) {
-                        $weighted_average = ($lecture_component * ($lecture_weight_percent / 100)) + 
-                                        ($laboratory_component * ($laboratory_weight_percent / 100));
-                    } elseif ($lecture_component !== null) {
-                        $weighted_average = $lecture_component;
-                    }
-                    echo '<td class="text-center" style="background-color: #FFF3CD; font-weight: bold;">' .
-                        ($weighted_average > 0 ? number_format($weighted_average, 2, '.', '') : '0.00') .
-                        '</td>';
-                } else {
-                    // For lab-only schedules, use laboratory component directly
-                    $weighted_average = $laboratory_component ?? 0;
+                    echo '<td class="text-center" style="background-color:#FFF3CD;font-weight:bold;">' . ($row['weighted_avg'] > 0 ? number_format($row['weighted_avg'], 2, '.', '') : '0.00') . '</td>';
                 }
-
-                // Weighted Grade (Point Grade)
-                $weighted_grade = '';
-                if ($weighted_average > 0) {
-                    foreach ($this->point_grade_equivalent as $p_value) {
-                        if ($weighted_average >= $p_value->minimum && $weighted_average < $p_value->maximum + 1) {
-                            $weighted_grade = $p_value->grade;
-                            break;
-                        }
-                    }
-                }
-                echo '<td class="text-center">' . htmlspecialchars($weighted_grade) . '</td>';
-
-                // Remarks
-                $term_grade_record = DB::table('term_grades')
-                    ->where('schedule_id', '=', $this->detail['schedule_id'])
-                    ->where('student_id', '=', $student->id)
-                    ->where('term_id', '=', $this->detail['term_id'])
-                    ->first();
-
-                $remarks = $term_grade_record && $term_grade_record->remarks
-                    ? $term_grade_record->remarks
-                    : 'N/A';
-
-                $bg_color = match ($remarks) {
-                    'PASSED' => '#198754',
-                    'FAILED' => '#dc3545',
-                    'INC' => '#ffc107',
-                    'DROP' => '#6c757d',
-                    default => '#f8f9fa'
-                };
-
-                $text_color = match ($remarks) {
-                    'PASSED' => '#ffffff',
-                    'FAILED' => '#ffffff',
-                    'INC' => '#000000',
-                    'DROP' => '#ffffff',
-                    default => '#000000'
-                };
-
-                echo '<td class="text-center" style="background-color: ' . $bg_color . '; color: ' . $text_color . '; font-weight: bold;">' .
-                    htmlspecialchars($remarks) .
-                    '</td>';
-
+                echo '<td class="text-center">' . e($row['weighted_grade']) . '</td>';
+                echo '<td class="text-center" style="' . $this->remarkStyle($row['remark']) . '">' . e($row['remark']) . '</td>';
                 echo '</tr>';
             }
 
             echo '</tbody></table>';
-            echo '<br><p><em>Generated on: ' . now()->timezone('Asia/Manila')->format('F d, Y h:i A') . ' </em></p>';
+            echo '<br><p><em>Generated on: ' . now()->timezone('Asia/Manila')->format('F d, Y h:i A') . '</em></p>';
             echo '</body></html>';
-        };
-
-        return response()->stream($callback, 200, $headers);
+        }, 200, [
+            'Content-Type'        => 'application/vnd.ms-excel',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+            'Pragma'              => 'no-cache',
+            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
+            'Expires'             => '0',
+        ]);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────
+    // EXPORT CSV  (Laboratory schedule)
+    // ─────────────────────────────────────────────────────────────────────────────
     public function exportCSVLabType()
     {
-        // Get all students for this schedule
-        $students = DB::table('enrolled_students as es')
-            ->select(
-                's.id',
-                's.code',
-                DB::raw('CONCAT_WS(" ", s.first_name, s.middle_name, s.last_name, s.suffix) AS fullname'),
-                'c.name as college',
-                'd.name as department',
-                'yl.year_level'
-            )
-            ->leftJoin('students as s', 's.id', 'es.student_id')
-            ->leftJoin('colleges as c', 'c.id', 's.college_id')
-            ->leftJoin('departments as d', 'd.id', 's.department_id')
-            ->leftJoin('year_levels as yl', 'yl.id', 's.year_level_id')
-            ->where('es.schedule_id', '=', $this->detail['schedule_id'])
-            ->orderBy('s.is_active', 'desc')
-            ->orderBy('s.id', 'desc')
-            ->get();
+        $students = $this->getExportStudents();
 
-        // Apply filters
-        if (!empty($this->filters['search'])) {
-            $students = $students->filter(function ($student) {
-                return stripos($student->code, $this->filters['search']) !== false ||
-                    stripos($student->fullname, $this->filters['search']) !== false;
-            });
-        }
-
-        if (!empty($this->filters['remarks'])) {
-            $student_ids = DB::table('term_grades')
-                ->where('schedule_id', '=', $this->detail['schedule_id'])
-                ->where('term_id', '=', $this->detail['term_id'])
-                ->where('remarks', '=', $this->filters['remarks'])
-                ->pluck('student_id')
-                ->toArray();
-            $students = $students->whereIn('id', $student_ids);
-        }
-
-        // Get current term info
         $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
-        $term_name = $current_term ? $current_term->term_name : 'Term';
-        
-        // Get lab weight
-        $lab_lec_weight_lab = DB::table('lab_lec')
-            ->where('schedule_id', '=', $this->detail['schedule_id'])
-            ->where('term_id', '=', $this->detail['term_id'])
-            ->first();
-        
-        $lab_weight_percent = $lab_lec_weight_lab ? floatval($lab_lec_weight_lab->sub_weight) : 100;
+        $term_name    = $current_term ? $current_term->term_name : 'Term';
+        $lab_pct      = $this->getLabOnlyPct();
 
-        // Prepare CSV content
-        $filename = 'evaluation_lab_' . $term_name . '_' . $this->school_year . '_' . $this->semester . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.csv';
+        $filename = 'evaluation_lab_' . $term_name . '_' . $this->school_year . '_' . $this->semester
+            . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.csv';
 
-        $headers = [
-            'Content-Type' => 'text/csv',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-        ];
+        $weight = $this->getTotalWeight();
 
-        $callback = function () use ($students, $term_name, $lab_weight_percent) {
+        return response()->stream(function () use ($students, $term_name, $lab_pct, $weight) {
             $file = fopen('php://output', 'w');
             fprintf($file, chr(0xEF) . chr(0xBB) . chr(0xBF));
 
-            // Header row
             $header = ['#', 'Student Code', 'Student Name', 'College', 'Department', 'Year Level'];
-
-            // Add school work type columns
             foreach ($this->school_work_types as $swt) {
-                if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id) {
+                if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id)
                     $header[] = $swt->school_work_type . ' (%)';
-                }
             }
-
             $header[] = 'Total';
-            $header[] = 'Laboratory (Weighted ' . number_format($lab_weight_percent, 2) . '%)';
+            $header[] = 'Laboratory (Weighted ' . number_format($lab_pct, 2) . '%)';
             $header[] = 'Weighted Grade';
             $header[] = 'Remarks';
-
             fputcsv($file, $header);
 
-            // Get weight totals
-            $weight = DB::table('school_works_types')
-                ->select(DB::raw('sum(weight) as total_weight'))
-                ->where('schedule_id', '=', $this->detail['schedule_id'])
-                ->where('term_id', '=', $this->detail['term_id'])
-                ->first();
-
-            // Data rows
-            $counter = 1;
+            $i = 1;
             foreach ($students as $student) {
-                $row = [
-                    $counter++,
+                // For lab-only: lec_pct unused; lab_weight_pct_lab = lab_pct
+                $row = $this->calcStudentRow($student, $this->school_work_types, $weight, 0, 0, $lab_pct);
+
+                $line = [
+                    $i++,
                     $student->code,
                     $student->fullname,
-                    $student->college ?? 'N/A',
+                    $student->college   ?? 'N/A',
                     $student->department ?? 'N/A',
-                    $student->year_level ?? 'N/A'
+                    $student->year_level ?? 'N/A',
                 ];
+                foreach ($row['swt_cols'] as $col) $line[] = $col['value'];
+                $line[] = $row['total_grade_pct'] > 0 ? number_format($row['total_grade_pct'], 2, '.', '') : '';
+                $line[] = $row['lab_value_weighted'] !== null ? number_format($row['lab_value_weighted'], 2, '.', '') : '0.00';
+                $line[] = $row['weighted_grade'];
+                $line[] = $row['remark'];
 
-                // Calculate school work scores
-                $total_grade = 0;
-                foreach ($this->school_work_types as $swt) {
-                    if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id) {
-                        $school_works = DB::table('school_works as sw')
-                            ->select('sw.id', 'sw.max_score', 'sws.score')
-                            ->leftJoin('school_work_scores as sws', 'sws.school_work_id', 'sw.id')
-                            ->where('sw.school_work_type_id', '=', $swt->id)
-                            ->where('sw.schedule_id', '=', $this->detail['schedule_id'])
-                            ->where('sw.term_id', '=', $this->detail['term_id'])
-                            ->where(function ($query) use ($student) {
-                                $query->whereNull('sws.student_id')->orWhere('sws.student_id', $student->id);
-                            })
-                            ->get();
-
-                        $school_work_count = 0;
-                        $school_work_average = 0;
-                        foreach ($school_works as $sw) {
-                            if ($sw->score !== null && $sw->max_score > 0) {
-                                $school_work_average += ($sw->score / $sw->max_score);
-                                $school_work_count++;
-                            }
-                        }
-
-                        if ($school_work_count > 0) {
-                            $sub_total = $school_work_average / $school_work_count;
-                            $row[] = number_format($sub_total * 100, 2, '.', '');
-                            $school_work_type_weight = $weight->total_weight ? ($swt->weight / $weight->total_weight * 100) : 0;
-                            $total_grade += ($sub_total * $school_work_type_weight / 100);
-                        } else {
-                            $row[] = '';
-                        }
-                    }
-                }
-
-                // Total column
-                $row[] = $total_grade > 0 ? number_format($total_grade * 100, 2, '.', '') : '';
-
-                // Laboratory Grade (Weighted)
-                $lab_lec_grade = DB::table('lab_lec_grades')
-                    ->where('schedule_id', '=', $this->detail['schedule_id'])
-                    ->where('student_id', '=', $student->id)
-                    ->first();
-
-                $laboratory_component = null;
-                if ($lab_lec_grade != null && floatval($lab_lec_grade->grade)) {
-                    $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
-                    $term_weight_percent = $current_term ? $current_term->weight : 100;
-                    $actual_lab_grade_percent = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100;
-                    $scaled_laboratory_grade = ($actual_lab_grade_percent / $term_weight_percent) * 10000;
-                    
-                    // Apply laboratory weight
-                    $weighted_laboratory_grade = $scaled_laboratory_grade * ($lab_weight_percent / 100);
-                    $laboratory_component = $scaled_laboratory_grade;
-                    
-                    $row[] = number_format($weighted_laboratory_grade, 2, '.', '');
-                } else {
-                    $row[] = $lab_lec_grade ? $lab_lec_grade->other : '0.00';
-                }
-
-                $weighted_average = $laboratory_component ?? 0;
-
-                // Weighted Grade
-                $weighted_grade = '';
-                if ($weighted_average > 0) {
-                    foreach ($this->point_grade_equivalent as $p_value) {
-                        if ($weighted_average >= $p_value->minimum && $weighted_average < $p_value->maximum + 1) {
-                            $weighted_grade = $p_value->grade;
-                            break;
-                        }
-                    }
-                }
-                $row[] = $weighted_grade;
-
-                // Remarks
-                $term_grade_record = DB::table('term_grades')
-                    ->where('schedule_id', '=', $this->detail['schedule_id'])
-                    ->where('student_id', '=', $student->id)
-                    ->where('term_id', '=', $this->detail['term_id'])
-                    ->first();
-
-                $row[] = $term_grade_record && $term_grade_record->remarks ? $term_grade_record->remarks : 'N/A';
-
-                fputcsv($file, $row);
+                fputcsv($file, $line);
             }
-
             fclose($file);
-        };
-
-        return response()->stream($callback, 200, $headers);
+        }, 200, [
+            'Content-Type'        => 'text/csv',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+        ]);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────
+    // EXPORT EXCEL (Laboratory schedule)
+    // ─────────────────────────────────────────────────────────────────────────────
     public function exportExcelLabType()
     {
-        // Get all students for this schedule
+        $students = $this->getExportStudents();
+
+        $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
+        $term_name    = $current_term ? $current_term->term_name : 'Term';
+        $lab_pct      = $this->getLabOnlyPct();
+
+        $filename = 'evaluation_lab_' . $term_name . '_' . $this->school_year . '_' . $this->semester
+            . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.xls';
+
+        $weight = $this->getTotalWeight();
+
+        return response()->stream(function () use ($students, $term_name, $lab_pct, $weight) {
+            echo $this->excelHead($term_name);
+            echo '<h2>' . e($term_name) . ' Evaluation Report (Laboratory)</h2>';
+            echo '<p><strong>School Year:</strong> ' . e($this->school_year) . '</p>';
+            echo '<p><strong>Semester:</strong> ' . e($this->semester) . '</p>';
+            if ($this->schedule) {
+                echo '<p><strong>Subject:</strong> ' . e($this->schedule->subject) . '</p>';
+                echo '<p><strong>Faculty:</strong> ' . e($this->schedule->faculty_fullname) . '</p>';
+            }
+            echo '<p><strong>Laboratory Weight:</strong> ' . number_format($lab_pct, 2) . '%</p><br>';
+            echo '<table><thead><tr>';
+            echo '<th>#</th><th>Student Code</th><th>Student Name</th><th>College</th><th>Department</th><th>Year Level</th>';
+            foreach ($this->school_work_types as $swt) {
+                if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id)
+                    echo '<th>' . e($swt->school_work_type) . ' (%)</th>';
+            }
+            echo '<th>Total</th>';
+            echo '<th>Laboratory (Weighted ' . number_format($lab_pct, 2) . '%)</th>';
+            echo '<th>Weighted Grade</th><th>Remarks</th></tr></thead><tbody>';
+
+            $i = 1;
+            foreach ($students as $student) {
+                $row = $this->calcStudentRow($student, $this->school_work_types, $weight, 0, 0, $lab_pct);
+                echo '<tr>';
+                echo '<td>' . $i++ . '</td>';
+                echo '<td>' . e($student->code) . '</td>';
+                echo '<td>' . e($student->fullname) . '</td>';
+                echo '<td>' . e($student->college   ?? 'N/A') . '</td>';
+                echo '<td>' . e($student->department ?? 'N/A') . '</td>';
+                echo '<td>' . e($student->year_level ?? 'N/A') . '</td>';
+
+                foreach ($row['swt_cols'] as $col)
+                    echo '<td class="text-center">' . e($col['value']) . '</td>';
+
+                echo '<td class="text-center">' . ($row['total_grade_pct'] > 0 ? number_format($row['total_grade_pct'], 2, '.', '') : '') . '</td>';
+                echo '<td class="text-center">' . ($row['lab_value_weighted'] !== null ? number_format($row['lab_value_weighted'], 2, '.', '') : '0.00') . '</td>';
+                echo '<td class="text-center">' . e($row['weighted_grade']) . '</td>';
+                echo '<td class="text-center" style="' . $this->remarkStyle($row['remark']) . '">' . e($row['remark']) . '</td>';
+                echo '</tr>';
+            }
+
+            echo '</tbody></table>';
+            echo '<br><p><em>Generated on: ' . now()->timezone('Asia/Manila')->format('F d, Y h:i A') . '</em></p>';
+            echo '</body></html>';
+        }, 200, [
+            'Content-Type'        => 'application/vnd.ms-excel',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+            'Pragma'              => 'no-cache',
+            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
+            'Expires'             => '0',
+        ]);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Small private helpers to reduce repetition
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /** Fetch & filter students for export */
+    private function getExportStudents()
+    {
         $students = DB::table('enrolled_students as es')
             ->select(
                 's.id',
@@ -2524,236 +2179,99 @@ class FacultyEvaluationLists extends Component
             ->leftJoin('colleges as c', 'c.id', 's.college_id')
             ->leftJoin('departments as d', 'd.id', 's.department_id')
             ->leftJoin('year_levels as yl', 'yl.id', 's.year_level_id')
-            ->where('es.schedule_id', '=', $this->detail['schedule_id'])
+            ->where('es.schedule_id', $this->detail['schedule_id'])
             ->orderBy('s.is_active', 'desc')
             ->orderBy('s.id', 'desc')
             ->get();
 
-        // Apply filters
         if (!empty($this->filters['search'])) {
-            $students = $students->filter(function ($student) {
-                return stripos($student->code, $this->filters['search']) !== false ||
-                    stripos($student->fullname, $this->filters['search']) !== false;
-            });
+            $search   = $this->filters['search'];
+            $students = $students->filter(fn($s) =>
+                stripos($s->code, $search) !== false || stripos($s->fullname, $search) !== false
+            );
         }
 
         if (!empty($this->filters['remarks'])) {
-            $student_ids = DB::table('term_grades')
-                ->where('schedule_id', '=', $this->detail['schedule_id'])
-                ->where('term_id', '=', $this->detail['term_id'])
-                ->where('remarks', '=', $this->filters['remarks'])
-                ->pluck('student_id')
-                ->toArray();
-            $students = $students->whereIn('id', $student_ids);
+            $ids      = DB::table('term_grades')
+                ->where('schedule_id', $this->detail['schedule_id'])
+                ->where('term_id', $this->detail['term_id'])
+                ->where('remarks', $this->filters['remarks'])
+                ->pluck('student_id')->toArray();
+            $students = $students->whereIn('id', $ids);
         }
 
-        // Get current term info
-        $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
-        $term_name = $current_term ? $current_term->term_name : 'Term';
-        
-        // Get lab weight
-        $lab_lec_weight_lab = DB::table('lab_lec')
-            ->where('schedule_id', '=', $this->detail['schedule_id'])
-            ->where('term_id', '=', $this->detail['term_id'])
+        return $students;
+    }
+
+    /** Lecture weight % and laboratory weight % for the current term */
+    private function getLabLecPcts(): array
+    {
+        $ll  = DB::table('lab_lec')
+            ->where('schedule_id', $this->detail['schedule_id'])
+            ->where('term_id', $this->detail['term_id'])
             ->first();
-        
-        $lab_weight_percent = $lab_lec_weight_lab ? floatval($lab_lec_weight_lab->sub_weight) : 100;
+        $lec = $ll ? floatval($ll->sub_weight) : 80.0;
+        return [$lec, 100 - $lec];
+    }
 
-        // Create Excel content
-        $filename = 'evaluation_lab_' . $term_name . '_' . $this->school_year . '_' . $this->semester . '_' . now()->timezone('Asia/Manila')->format('Y-m-d_His') . '.xls';
+    /** Lab-only weight % (for is_lec == 0 schedules) */
+    private function getLabOnlyPct(): float
+    {
+        $ll = DB::table('lab_lec')
+            ->where('schedule_id', $this->detail['schedule_id'])
+            ->where('term_id', $this->detail['term_id'])
+            ->first();
+        return $ll ? floatval($ll->sub_weight) : 100.0;
+    }
 
-        $headers = [
-            'Content-Type' => 'application/vnd.ms-excel',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-            'Pragma' => 'no-cache',
-            'Cache-Control' => 'must-revalidate, post-check=0, pre-check=0',
-            'Expires' => '0',
-        ];
+    /** Total weight of school work types for current term */
+    private function getTotalWeight()
+    {
+        return DB::table('school_works_types')
+            ->select(DB::raw('sum(weight) as total_weight'))
+            ->where('schedule_id', $this->detail['schedule_id'])
+            ->where('term_id', $this->detail['term_id'])
+            ->first();
+    }
 
-        $callback = function () use ($students, $term_name, $lab_weight_percent) {
-            echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">';
-            echo '<head>';
-            echo '<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">';
-            echo '<!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>';
-            echo '<x:Name>Evaluation</x:Name>';
-            echo '<x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet>';
-            echo '</x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->';
-            echo '<style>';
-            echo 'table { border-collapse: collapse; width: 100%; }';
-            echo 'th, td { border: 1px solid black; padding: 8px; text-align: left; }';
-            echo 'th { background-color: #952323; color: white; font-weight: bold; }';
-            echo '.text-center { text-align: center; }';
-            echo '</style>';
-            echo '</head><body>';
+    /** Excel HTML boilerplate head */
+    private function excelHead(string $sheetName): string
+    {
+        return <<<HTML
+    <html xmlns:o="urn:schemas-microsoft-com:office:office"
+        xmlns:x="urn:schemas-microsoft-com:office:excel"
+        xmlns="http://www.w3.org/TR/REC-html40">
+    <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>
+    <x:Name>{$sheetName}</x:Name>
+    <x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+    </x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
+    <style>
+    table{border-collapse:collapse;width:100%}
+    th,td{border:1px solid black;padding:8px;text-align:left}
+    th{background-color:#952323;color:white;font-weight:bold}
+    .text-center{text-align:center}
+    </style>
+    </head><body>
+    HTML;
+    }
 
-            // Add title and schedule info
-            echo '<h2>' . htmlspecialchars($term_name) . ' Evaluation Report (Laboratory)</h2>';
-            echo '<p><strong>School Year:</strong> ' . htmlspecialchars($this->school_year) . '</p>';
-            echo '<p><strong>Semester:</strong> ' . htmlspecialchars($this->semester) . '</p>';
-            if ($this->schedule) {
-                echo '<p><strong>Subject:</strong> ' . htmlspecialchars($this->schedule->subject) . '</p>';
-                echo '<p><strong>Faculty:</strong> ' . htmlspecialchars($this->schedule->faculty_fullname) . '</p>';
-            }
-            echo '<p><strong>Laboratory Weight:</strong> ' . number_format($lab_weight_percent, 2) . '%</p>';
-            echo '<br>';
-
-            echo '<table>';
-
-            // Header row
-            echo '<thead><tr>';
-            echo '<th>#</th>';
-            echo '<th>Student Code</th>';
-            echo '<th>Student Name</th>';
-            echo '<th>College</th>';
-            echo '<th>Department</th>';
-            echo '<th>Year Level</th>';
-
-            // Add school work type columns dynamically
-            foreach ($this->school_work_types as $swt) {
-                if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id) {
-                    echo '<th>' . htmlspecialchars($swt->school_work_type) . ' (%)</th>';
-                }
-            }
-
-            echo '<th>Total</th>';
-            echo '<th>Laboratory (Weighted ' . number_format($lab_weight_percent, 2) . '%)</th>';
-            echo '<th>Weighted Grade</th>';
-            echo '<th>Remarks</th>';
-            echo '</tr></thead><tbody>';
-
-            // Get weight totals
-            $weight = DB::table('school_works_types')
-                ->select(DB::raw('sum(weight) as total_weight'))
-                ->where('schedule_id', '=', $this->detail['schedule_id'])
-                ->where('term_id', '=', $this->detail['term_id'])
-                ->first();
-
-            // Data rows
-            $counter = 1;
-            foreach ($students as $student) {
-                echo '<tr>';
-                echo '<td class="text-center">' . $counter++ . '</td>';
-                echo '<td>' . htmlspecialchars($student->code) . '</td>';
-                echo '<td>' . htmlspecialchars($student->fullname) . '</td>';
-                echo '<td>' . htmlspecialchars($student->college ?? 'N/A') . '</td>';
-                echo '<td>' . htmlspecialchars($student->department ?? 'N/A') . '</td>';
-                echo '<td>' . htmlspecialchars($student->year_level ?? 'N/A') . '</td>';
-
-                // Calculate school work scores
-                $total_grade = 0;
-                foreach ($this->school_work_types as $key => $swt) {
-                    if ($swt->weight > 0 && $swt->id != $this->current_school_work_type->id) {
-                        $school_works = DB::table('school_works as sw')
-                            ->select('sw.id', 'sw.max_score', 'sws.score')
-                            ->leftJoin('school_work_scores as sws', 'sws.school_work_id', 'sw.id')
-                            ->where('sw.school_work_type_id', '=', $swt->id)
-                            ->where('sw.schedule_id', '=', $this->detail['schedule_id'])
-                            ->where('sw.term_id', '=', $this->detail['term_id'])
-                            ->where(function ($query) use ($student) {
-                                $query->whereNull('sws.student_id')
-                                    ->orWhere('sws.student_id', $student->id);
-                            })
-                            ->get();
-
-                        $school_work_count = 0;
-                        $school_work_average = 0;
-                        foreach ($school_works as $sw) {
-                            if ($sw->score !== null && $sw->max_score > 0) {
-                                $school_work_average += ($sw->score / $sw->max_score);
-                                $school_work_count++;
-                            }
-                        }
-
-                        if ($school_work_count > 0) {
-                            $sub_total = $school_work_average / $school_work_count;
-                            echo '<td class="text-center">' . number_format($sub_total * 100, 2, '.', '') . '</td>';
-                            $school_work_type_weight = $weight->total_weight ? ($swt->weight / $weight->total_weight * 100) : 0;
-                            $total_grade += ($sub_total * $school_work_type_weight / 100);
-                        } else {
-                            echo '<td class="text-center"></td>';
-                        }
-                    }
-                }
-
-                // Total column
-                echo '<td class="text-center">' . ($total_grade > 0 ? number_format($total_grade * 100, 2, '.', '') : '') . '</td>';
-
-                // Laboratory Grade (Weighted)
-                $lab_lec_grade = DB::table('lab_lec_grades')
-                    ->where('schedule_id', '=', $this->detail['schedule_id'])
-                    ->where('student_id', '=', $student->id)
-                    ->first();
-
-                $laboratory_component = null;
-                if ($lab_lec_grade != null && floatval($lab_lec_grade->grade)) {
-                    $current_term = collect($this->terms)->firstWhere('id', $this->detail['term_id']);
-                    $term_weight_percent = $current_term ? $current_term->weight : 100;
-                    $actual_lab_grade_percent = ($lab_lec_grade->grade / $lab_lec_grade->sub_weight) * 100;
-                    $scaled_laboratory_grade = ($actual_lab_grade_percent / $term_weight_percent) * 10000;
-                    
-                    // Apply laboratory weight
-                    $weighted_laboratory_grade = $scaled_laboratory_grade * ($lab_weight_percent / 100);
-                    $laboratory_component = $scaled_laboratory_grade;
-                    
-                    echo '<td class="text-center">' . number_format($weighted_laboratory_grade, 2, '.', '') . '</td>';
-                } else {
-                    echo '<td class="text-center">' . htmlspecialchars($lab_lec_grade ? $lab_lec_grade->other : '0.00') . '</td>';
-                }
-
-                $weighted_average = $laboratory_component ?? 0;
-
-                // Weighted Grade (Point Grade)
-                $weighted_grade = '';
-                if ($weighted_average > 0) {
-                    foreach ($this->point_grade_equivalent as $p_value) {
-                        if ($weighted_average >= $p_value->minimum && $weighted_average < $p_value->maximum + 1) {
-                            $weighted_grade = $p_value->grade;
-                            break;
-                        }
-                    }
-                }
-                echo '<td class="text-center">' . htmlspecialchars($weighted_grade) . '</td>';
-
-                // Remarks
-                $term_grade_record = DB::table('term_grades')
-                    ->where('schedule_id', '=', $this->detail['schedule_id'])
-                    ->where('student_id', '=', $student->id)
-                    ->where('term_id', '=', $this->detail['term_id'])
-                    ->first();
-
-                $remarks = $term_grade_record && $term_grade_record->remarks
-                    ? $term_grade_record->remarks
-                    : 'N/A';
-
-                $bg_color = match ($remarks) {
-                    'PASSED' => '#198754',
-                    'FAILED' => '#dc3545',
-                    'INC' => '#ffc107',
-                    'DROP' => '#6c757d',
-                    default => '#f8f9fa'
-                };
-
-                $text_color = match ($remarks) {
-                    'PASSED' => '#ffffff',
-                    'FAILED' => '#ffffff',
-                    'INC' => '#000000',
-                    'DROP' => '#ffffff',
-                    default => '#000000'
-                };
-
-                echo '<td class="text-center" style="background-color: ' . $bg_color . '; color: ' . $text_color . '; font-weight: bold;">' .
-                    htmlspecialchars($remarks) .
-                    '</td>';
-
-                echo '</tr>';
-            }
-
-            echo '</tbody></table>';
-            echo '<br><p><em>Generated on: ' . now()->timezone('Asia/Manila')->format('F d, Y h:i A') . ' </em></p>';
-            echo '</body></html>';
+    /** Inline style for remark cell */
+    private function remarkStyle(string $remark): string
+    {
+        $bg = match($remark) {
+            'PASSED' => '#198754',
+            'FAILED' => '#dc3545',
+            'INC'    => '#ffc107',
+            'DROP'   => '#6c757d',
+            default  => '#f8f9fa',
         };
-
-        return response()->stream($callback, 200, $headers);
+        $fg = match($remark) {
+            'INC', 'N/A' => '#000000',
+            default      => '#ffffff',
+        };
+        return "background-color:{$bg};color:{$fg};font-weight:bold;";
     }
 
     public function storeLaboratoryValues()
